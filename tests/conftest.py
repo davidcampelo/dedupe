@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -22,7 +21,7 @@ def isolated_home(
     ):
         monkeypatch.setenv(var, str(home / sub))
     monkeypatch.delenv("XDG_DATA_DIRS", raising=False)
-    monkeypatch.setenv("QT_QPA_PLATFORM", os.environ.get("QT_QPA_PLATFORM", "offscreen"))
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     yield home
 
 

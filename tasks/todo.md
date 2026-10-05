@@ -199,14 +199,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 ## Phase 3: GUI vertical slice
 
-### Task 11: Icon set
+### Task 11: Icon set ✅
 
 **Description:** Redraw the icons from `docs/UI icon set@2x.png` as SVGs (24 px grid, 1.75 stroke, round caps, `currentColor`): 18 icons plus 5 status badges. Draw the "Twin Sheets" app icon as `io.github.davidcampelo.Dedupe.svg` and `-symbolic.svg`. `gui/icons.py` loads them via `importlib.resources` and recolors from `QPalette`; keep/delete/protected/warning use fixed semantic colors.
 
 **Acceptance criteria:**
-- [ ] Every mockup icon exists and loads to a non-null `QIcon`
-- [ ] Icons are legible on light and dark palettes
-- [ ] A contact sheet (`scripts/render_icons.py`) next to the mockup has been approved by the human
+- [x] Every mockup icon exists and loads to a non-null `QIcon`
+- [x] Icons are legible on light and dark palettes
+- [x] A contact sheet (`scripts/render_icons.py`) next to the mockup has been approved by the human
 
 **Dependencies:** T1
 

@@ -117,7 +117,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 **Checkpoint B:** the core is feature-complete and mypy-strict clean; every safety guard is mutation-checked; a 100k-file benchmark has been recorded.
 
 ### Phase 3: GUI vertical slice
-- [ ] T11: Icon set (SVG authoring + theme-aware loader)
+- [x] T11: Icon set (SVG authoring + theme-aware loader)
 - [ ] T12: Job runner, UI watchdog, GUI-thread rules test, main window shell with scan/progress/cancel
 - [ ] T13: Duplicates tree model/view (batched loading, checkboxes, badges, Space toggling)
 - [ ] T14: Delete confirmation flow (checkbox for permanent delete) executed by `ActionJob`
