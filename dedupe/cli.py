@@ -13,6 +13,7 @@ from typing import Any
 
 from dedupe import __version__
 from dedupe.core.cache import HashCache
+from dedupe.core.formatting import human
 from dedupe.core.hidden import scan_hidden
 from dedupe.core.models import CancelToken, DuplicateGroup, FileEntry, Progress, ScanResult
 from dedupe.core.pipeline import run_scan
@@ -51,15 +52,6 @@ def build_parser() -> argparse.ArgumentParser:
     cache_sub = cache.add_subparsers(dest="cache_command", required=True)
     cache_sub.add_parser("clear", help="forget every cached hash")
     return parser
-
-
-def human(n: int) -> str:
-    size = float(n)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if size < 1024 or unit == "TiB":
-            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    raise AssertionError  # pragma: no cover
 
 
 def _file_json(g: DuplicateGroup, f: FileEntry) -> dict[str, Any]:

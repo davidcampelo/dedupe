@@ -214,14 +214,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 12: Job runner, responsiveness gates, main window shell
+### Task 12: Job runner, responsiveness gates, main window shell ✅
 
 **Description:** `gui/workers.py`: a generic `Job` (`QRunnable` + `CancelToken` + queued `progress/finished/failed` signals, progress throttled to ≤ 20 Hz) and `ScanJob`. Test infrastructure: the `ui_watchdog` fixture in `tests/gui/conftest.py`, the static `tests/test_gui_thread_rules.py`, and the `DEDUPE_STALL_LOG=1` runtime stall logger. `gui/main_window.py` has the folder button, drag-and-drop, recent folders, Scan/Cancel, a progress bar with stage text, placeholder tabs and the status bar. Closing the window cancels jobs and waits for them (bounded).
 
 **Acceptance criteria:**
-- [ ] pytest-qt smoke test: scanning a fixture folder reports the expected group count, **under `ui_watchdog`**
-- [ ] A slow scan (an injected sleep per file) can be cancelled within 1 s, and the watchdog shows no gap over 100 ms
-- [ ] The GUI-thread rules test fails when an `os.stat` is added to `main_window.py` (checked by hand once)
+- [x] pytest-qt smoke test: scanning a fixture folder reports the expected group count, **under `ui_watchdog`**
+- [x] A slow scan (an injected sleep per file) can be cancelled within 1 s, and the watchdog shows no gap over 100 ms
+- [x] The GUI-thread rules test fails when an `os.stat` is added to `main_window.py` (checked by hand once)
 
 **Dependencies:** T4, T11
 

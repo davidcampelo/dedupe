@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+
+# Must be set before any QApplication exists (the shell may export xcb).
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +25,6 @@ def isolated_home(
     ):
         monkeypatch.setenv(var, str(home / sub))
     monkeypatch.delenv("XDG_DATA_DIRS", raising=False)
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     yield home
 
 
