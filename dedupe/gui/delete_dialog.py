@@ -151,13 +151,13 @@ def format_summary(summary: ActionSummary) -> str:
         Status.ALREADY_LINKED,
         Status.NOT_RUN,
     ):
-        items = [r for r in summary.results if r.status is status]
-        if not items:
+        total = summary.count(status)
+        if not total:
             continue
-        lines.append(f"\n{len(items)} skipped or failed ({status.value}):")
-        for r in items[:10]:
+        lines.append(f"\n{total} skipped or failed ({status.value}):")
+        for r in summary.examples.get(status, ()):
             lines.append(f"  {r.path}" + (f": {r.detail}" if r.detail else ""))
-        if len(items) > 10:
-            lines.append(f"  … and {len(items) - 10} more")
+        if total > len(summary.examples.get(status, ())):
+            lines.append(f"  … and {total - len(summary.examples[status])} more")
     lines.extend(f"\nWarning: {w}" for w in summary.warnings)
     return "\n".join(lines)

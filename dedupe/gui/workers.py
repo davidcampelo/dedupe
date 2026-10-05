@@ -17,6 +17,7 @@ from dedupe.core.actions import (
     PlanRefused,
     TrashFn,
     execute,
+    groups_after,
     plan_actions,
 )
 from dedupe.core.cache import HashCache
@@ -60,7 +61,8 @@ class Job(QRunnable):
 
     def run(self) -> None:
         try:
-            result = self.fn(self.cancel_token, self._on_progress)
+            with gc_paused():  # a gen-2 collection would freeze the GUI thread for 50+ ms
+                result = self.fn(self.cancel_token, self._on_progress)
         except Exception as e:
             self.done = True
             self.signals.failed.emit(f"{type(e).__name__}: {e}")
@@ -80,9 +82,8 @@ class ScanJob(Job):
         def work(cancel: CancelToken, progress: ProgressCallback) -> Any:
             cache = HashCache() if options.use_cache else None
             try:
-                with gc_paused():
-                    result = run_scan(root, options, progress, cancel, cache)
-                    freeze()  # the result is big and long-lived: keep GC passes off it
+                result = run_scan(root, options, progress, cancel, cache)
+                freeze()  # the result is big and long-lived: keep GC passes off it
                 return result
             finally:
                 if cache is not None:
@@ -102,7 +103,8 @@ class PlanOutcome:
 class ActionOutcome:
     summary: ActionSummary | None
     refused: tuple[str, ...] = ()
-    error: str = ""
+    # the duplicate groups that remain after a real deletion, computed off the GUI thread
+    remaining_groups: tuple[DuplicateGroup, ...] | None = None
 
 
 class PlanJob(Job):
@@ -149,7 +151,8 @@ class ActionJob(Job):
             except PlanRefused as e:
                 return ActionOutcome(None, tuple(e.reasons))
             summary = execute(plan, dry_run, progress, cancel, log_path, trash)
-            return ActionOutcome(summary)
+            remaining = None if dry_run else tuple(groups_after(groups, summary.gone))
+            return ActionOutcome(summary, remaining_groups=remaining)
 
         super().__init__(work)
 

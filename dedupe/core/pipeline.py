@@ -45,7 +45,7 @@ def run_scan(
     if isinstance(store, HashCache):
         store.flush()
         warnings = tuple(store.warnings)
-    return ScanResult(
+    result = ScanResult(
         root=root,
         warnings=warnings,
         groups=recommend_all(outcome.groups, options.protected_folders, root),
@@ -54,3 +54,5 @@ def run_scan(
         skipped=tuple(skipped) + outcome.skipped,
         files_scanned=scanned,
     )
+    _ = result.reclaimable  # computed here (worker thread) so reading it later is O(1)
+    return result

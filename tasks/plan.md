@@ -44,6 +44,7 @@ packaging: .desktop, hicolor icons, AppImage script, README
 - **Hashing.** xxhash `xxh3_128` over size + first 64 KiB + last 64 KiB for the partial hash. BLAKE3 over 1 MiB chunks for the full hash. Both run in a `ThreadPoolExecutor` (`min(4, cpu_count)` workers). The cache key is `(path, size, mtime_ns, inode, device)`. SQLite runs in WAL mode, with a single writer thread fed by a queue.
 - **Actions are a two-phase plan.** `plan_actions(selection, mode) -> ActionPlan` refuses (rather than warns) on the last-copy guard, protected paths and changed-since-scan files. `execute(plan, dry_run, progress, cancel)` re-checks each file immediately before acting. Dry run uses the same planner and skips only the mutation. Hardlink replacement links to a temp name and then `os.replace`s it over the duplicate. If Trash fails, the file is reported as failed. There is **never** a fallback to permanent delete.
 - **Settings.** User settings live in `$XDG_CONFIG_HOME/dedupe/settings.toml`: read with `tomllib`, written with `tomli-w`, and validated against a dataclass (unknown keys warn, wrong types fail). UI state (geometry, splitters, recent folders) lives in `QSettings`.
+- **Duplicates view.** A flat `QAbstractTableModel` in a `QTableView` that emulates the tree (see "Recorded measurements"), not a `QTreeView`.
 - **Icons.** The `docs/` PNGs are design mockups, so the SVGs are redrawn: 18 UI icons on a 24 px grid with a 1.75 stroke and round caps, plus 5 status badges and the "Twin Sheets" app icon (scalable, symbolic, and PNG sizes 16–256 under `io.github.davidcampelo.Dedupe`). Monochrome icons use `currentColor` and are recolored from the palette, so they follow light/dark mode.
 - **CLI uses `argparse`.** The CLI has two subcommands and never deletes, so Click isn't worth the extra dependency.
 - **Theme.** The app uses Qt 6's native style and palette and follows `QStyleHints.colorScheme()`, updating at runtime when the system theme changes.
@@ -153,6 +154,22 @@ After T4, these tasks are independent and can run in parallel: T5, T7 and T8. T6
 | Cancel latency | 0.04 s | from the token firing to `run_scan` returning |
 
 Profiling found three early bottlenecks that were fixed before this record: one future per file (now batched), one SQLite query per file (now bulk `get_many`), and a per-file folder-name check in the recommender (now cached per folder). Warm time went from 16.6 s to 4.8 s.
+
+**Checkpoint C responsiveness** (100,000 synthetic files, `tests/gui/test_scale.py` and an offscreen end-to-end run; longest gap between 10 ms GUI heartbeats):
+
+| Phase | Longest GUI gap | Limit |
+|---|---|---|
+| Scan (walk, hash, group, recommend) | 22 ms | 100 ms |
+| Loading 50k groups into the model | 28 ms | 100 ms |
+| Dry-run delete of 50k files (plan + execute + summary) | 39 ms | 100 ms |
+| Cancel a running 100k scan | < 1 s (asserted) | 1 s |
+
+Things the watchdog found that shaped the design (all fixed, all covered by the slow gate):
+- **QTreeView cannot scale to this.** One layout of 32.5k group rows cost 390 ms because Qt calls the Python model for every row on every change. The duplicates view is therefore a `QTableView` over a flat model that emulates a tree (expand/collapse inserts and removes one group's rows) and a delegate that draws the branch arrows. Loading 100k files went from 11.7 s with 400 ms freezes to 0.7 s with 18 ms gaps.
+- **Cyclic GC pauses** (gen 2, 50 to 130 ms with 100k live objects) froze the GUI. Jobs run with the collector paused and the model freezes freshly built nodes (`gui/gcutil.py`); the model breaks node cycles in small slices when it is replaced.
+- **GIL starvation.** The default 5 ms switch interval let pure-Python workers starve the GUI thread, so the app sets 0.2 ms (`tune_runtime`), and long worker loops in `actions.py` yield briefly (`_cooperate`). A 100k-entry `sorted()` of identities in the grouper held the GIL for 140 ms and now sorts only multi-link sets.
+- **Heavy GUI-thread work moved to workers:** result totals, the post-delete group list and the summary counters are computed in the job, not in the slot.
+- Coverage tracing slows Python 2 to 3x, so the full gate (which runs under `--cov`) is the strictest place these tests run; they pass there.
 
 ## Risks and mitigations
 

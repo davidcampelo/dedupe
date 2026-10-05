@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterable, Sequence
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dedupe.core.actions import groups_after
 from dedupe.core.formatting import human
 from dedupe.core.models import DuplicateGroup, FileEntry, Verdict
 from dedupe.core.recommender import is_protected
@@ -110,7 +110,14 @@ class DuplicatesModel(QAbstractTableModel):
         self._pending: list[DuplicateGroup] = []
         self._pending_pos = 0
         self._protected: tuple[str, ...] = ()
-        self._overrides: dict[Path, bool] = {}
+        self._overrides: dict[Path, bool] = {}  # carried into the next load
+        self._live_overrides: dict[Path, bool] = {}  # the user's current explicit choices
+        self._selected: set[Path] = set()
+        self._graveyard: list[list[GroupNode]] = []
+        self._reaper = QTimer(self)
+        self._reaper.setSingleShot(True)
+        self._reaper.setInterval(0)
+        self._reaper.timeout.connect(self._reap)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(0)
@@ -136,6 +143,7 @@ class DuplicatesModel(QAbstractTableModel):
         ``overrides`` carries the user's explicit choices over a reload."""
         self._timer.stop()
         self._overrides = overrides or {}
+        self._live_overrides = dict(self._overrides)
         self.beginResetModel()
         self._discard_nodes()
         self._groups = []
@@ -143,6 +151,7 @@ class DuplicatesModel(QAbstractTableModel):
         self._by_path = {}
         self.selected_size = 0
         self.selected_count = 0
+        self._selected = set()
         self._protected = tuple(protected_folders)
         self._pending = list(groups)
         self._pending_pos = 0
@@ -155,12 +164,27 @@ class DuplicatesModel(QAbstractTableModel):
             self.load_finished.emit()
 
     def _discard_nodes(self) -> None:
-        """Break node <-> group reference cycles so refcounting frees them even though the
-        collector never scans frozen objects (see gcutil)."""
-        for g in self._groups:
-            g.files.clear()
+        """Retire the old nodes. Their node <-> group reference cycles are broken in small
+        slices from the event loop (see ``_reap``): freeing 100k nodes at once takes ~100 ms,
+        and frozen objects (gcutil) would otherwise never be collected."""
+        if self._groups:
+            self._graveyard.append(self._groups)
+            self._reaper.start()
         self._by_path = {}
         self._rows = []
+
+    def _reap(self) -> None:
+        start = time.perf_counter()
+        while self._graveyard and time.perf_counter() - start < BATCH_BUDGET:
+            groups = self._graveyard[-1]
+            for _ in range(200):
+                if not groups:
+                    break
+                groups.pop().files.clear()
+            if not groups:
+                self._graveyard.pop()
+        if self._graveyard:
+            self._reaper.start()
 
     def _load_batch(self) -> None:
         start = time.perf_counter()
@@ -203,6 +227,7 @@ class DuplicatesModel(QAbstractTableModel):
             if f.checked:
                 self.selected_size += entry.size
                 self.selected_count += 1
+                self._selected.add(entry.path)
         return node
 
     # -- expand / collapse ---------------------------------------------------------------
@@ -253,6 +278,11 @@ class DuplicatesModel(QAbstractTableModel):
         if node is None or node.protected or node.checked == checked:
             return False
         node.override = checked
+        self._live_overrides[path] = checked
+        if checked:
+            self._selected.add(path)
+        else:
+            self._selected.discard(path)
         delta = 1 if checked else -1
         self.selected_count += delta
         self.selected_size += delta * node.entry.size
@@ -262,7 +292,7 @@ class DuplicatesModel(QAbstractTableModel):
         return True
 
     def selected_paths(self) -> set[Path]:
-        return {p for p, n in self._by_path.items() if n.checked}
+        return set(self._selected)
 
     def group_of(self, path: Path) -> DuplicateGroup | None:
         node = self._by_path.get(path)
@@ -282,24 +312,14 @@ class DuplicatesModel(QAbstractTableModel):
     def file_count(self) -> int:
         return len(self._by_path)
 
+    def replace_groups(self, groups: Sequence[DuplicateGroup]) -> None:
+        """Reload with new groups (e.g. after a deletion), keeping the user's choices."""
+        self.set_groups(groups, self._protected, dict(self._live_overrides))
+
     def remove_paths(self, removed: set[Path]) -> None:
         """Drop deleted files; a group left with fewer than two copies is no longer a duplicate
-        group. The user's other choices are kept."""
-        overrides = {
-            p: n.override
-            for p, n in self._by_path.items()
-            if n.override is not None and p not in removed
-        }
-        remaining: list[DuplicateGroup] = []
-        for g in self.groups():
-            if removed.isdisjoint(f.path for f in g.files):
-                remaining.append(g)
-                continue
-            files = tuple(f for f in g.files if f.path not in removed)
-            if len(files) >= 2:
-                recs = tuple(r for r in g.recommendations if r.path not in removed)
-                remaining.append(replace(g, files=files, recommendations=recs))
-        self.set_groups(remaining, self._protected, overrides)
+        group. Computed on the calling thread: prefer ``actions.groups_after`` in a job."""
+        self.replace_groups(groups_after(self.groups(), removed))
 
     def reclaimable(self) -> int:
         return sum(g.group.reclaimable for g in self._groups)
@@ -308,16 +328,19 @@ class DuplicatesModel(QAbstractTableModel):
         """Reset every choice to the recommendation."""
         for node in self._by_path.values():
             node.override = None
+        self._live_overrides = {}
         self._recount()
 
     def clear_selection(self) -> None:
         for node in self._by_path.values():
             if not node.protected:
                 node.override = False
+                self._live_overrides[node.entry.path] = False
         self._recount()
 
     def _recount(self) -> None:
         nodes = [n for n in self._by_path.values() if n.checked]
+        self._selected = {n.entry.path for n in nodes}
         self.selected_count = len(nodes)
         self.selected_size = sum(n.entry.size for n in nodes)
         if self._rows:

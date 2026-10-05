@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from dedupe.core.settings import SettingsError, load_settings
 from dedupe.gui import icons
+from dedupe.gui.gcutil import tune_runtime
 from dedupe.gui.main_window import MainWindow
 from dedupe.gui.stall import StallMonitor, log_stall
 
@@ -16,6 +17,7 @@ APP_ID = "io.github.davidcampelo.Dedupe"
 
 
 def main() -> int:
+    tune_runtime()
     app = QApplication(sys.argv)
     app.setApplicationName("Dedupe")
     app.setOrganizationName("davidcampelo")

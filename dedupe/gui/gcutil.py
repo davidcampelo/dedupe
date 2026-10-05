@@ -10,6 +10,7 @@ would leak, so the duplicates model breaks its own cycles when it is replaced.
 from __future__ import annotations
 
 import gc
+import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -35,6 +36,12 @@ def gc_paused() -> Iterator[None]:
             _paused -= 1
             if _paused == 0 and (resume or not gc.isenabled()):
                 gc.enable()
+
+
+def tune_runtime() -> None:
+    """Make worker threads hand the GIL back quickly. With the default 5 ms switch interval a
+    CPU-bound worker could starve the GUI thread for 100+ ms at a time."""
+    sys.setswitchinterval(0.0002)
 
 
 def freeze() -> None:

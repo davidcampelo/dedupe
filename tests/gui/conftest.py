@@ -6,7 +6,10 @@ from contextlib import contextmanager
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from dedupe.gui.gcutil import tune_runtime
 from dedupe.gui.stall import THRESHOLD, StallMonitor
+
+tune_runtime()  # same GIL tuning as the real app
 
 
 class UiWatchdog:

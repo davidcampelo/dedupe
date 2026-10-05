@@ -69,12 +69,13 @@ class StallMonitor(QObject):
         self._last = now
 
     def _sample(self) -> None:
-        reported = 0.0
+        reported = 0.0  # time of the last report; repeated every 0.25 s while a stall lasts
         while self._running:
             time.sleep(0.02)
             last = self._last
-            if time.monotonic() - last > self.threshold and last != reported:
-                reported = last
+            now = time.monotonic()
+            if now - last > self.threshold and now - reported > 0.25:
+                reported = now
                 frame = sys._current_frames().get(self._gui_thread)
                 stack = "".join(traceback.format_stack(frame)) if frame else "(no frame)"
                 if self.on_stall is not None:

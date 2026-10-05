@@ -6,6 +6,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import cached_property
 from pathlib import Path
 
 DEFAULT_EXCLUDES: tuple[str, ...] = (
@@ -128,7 +129,7 @@ class DuplicateGroup:
         return self.size * max(len(self.files) - 1, 0)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # no slots: ``reclaimable`` is a cached_property
 class ScanResult:
     root: Path
     groups: tuple[DuplicateGroup, ...] = ()
@@ -139,6 +140,6 @@ class ScanResult:
     cancelled: bool = False
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
-    @property
+    @cached_property
     def reclaimable(self) -> int:
         return sum(g.reclaimable for g in self.groups)

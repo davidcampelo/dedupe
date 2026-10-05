@@ -19,9 +19,10 @@ import contextlib
 import json
 import os
 import stat
+import time
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -95,41 +96,107 @@ class ActionResult:
     detail: str = ""
 
 
+EXAMPLES_PER_STATUS = 10
+
+
 @dataclass(frozen=True, slots=True)
 class ActionSummary:
+    """Totals are computed once, off the GUI thread, so showing a summary is O(1)."""
+
     mode: DeleteMode
     dry_run: bool
     results: tuple[ActionResult, ...]
     warnings: tuple[str, ...] = ()
+    counts: dict[Status, int] = field(default_factory=dict)
+    freed: int = 0
+    examples: dict[Status, tuple[ActionResult, ...]] = field(default_factory=dict)
+    gone: frozenset[Path] = frozenset()  # paths that no longer exist as separate files
+
+    @classmethod
+    def build(
+        cls,
+        mode: DeleteMode,
+        dry_run: bool,
+        results: list[ActionResult],
+        warnings: list[str],
+    ) -> ActionSummary:
+        counts: dict[Status, int] = {}
+        examples: dict[Status, list[ActionResult]] = {}
+        ok = Status.DRY_RUN if dry_run else Status.DONE
+        freed = 0
+        gone: set[Path] = set()
+        for r in results:
+            counts[r.status] = counts.get(r.status, 0) + 1
+            if r.status is ok:
+                freed += r.size
+            if r.status in (Status.DONE, Status.ALREADY_LINKED):
+                gone.add(r.path)
+            if r.status is not ok:
+                bucket = examples.setdefault(r.status, [])
+                if len(bucket) < EXAMPLES_PER_STATUS:
+                    bucket.append(r)
+        return cls(
+            mode,
+            dry_run,
+            tuple(results),
+            tuple(warnings),
+            counts,
+            freed,
+            {k: tuple(v) for k, v in examples.items()},
+            frozenset(gone),
+        )
 
     def count(self, status: Status) -> int:
-        return sum(r.status is status for r in self.results)
+        return self.counts.get(status, 0)
 
     @property
     def done(self) -> int:
         return self.count(Status.DRY_RUN if self.dry_run else Status.DONE)
 
-    @property
-    def freed(self) -> int:
-        ok = Status.DRY_RUN if self.dry_run else Status.DONE
-        return sum(r.size for r in self.results if r.status is ok)
+
+def groups_after(
+    groups: Iterable[DuplicateGroup], removed: set[Path] | frozenset[Path]
+) -> list[DuplicateGroup]:
+    """The duplicate groups that remain once ``removed`` files are gone. A group left with
+    fewer than two copies is no longer a duplicate group."""
+    remaining: list[DuplicateGroup] = []
+    for n, g in enumerate(groups):
+        _cooperate(n, 512)
+        if removed.isdisjoint(f.path for f in g.files):
+            remaining.append(g)
+            continue
+        files = tuple(f for f in g.files if f.path not in removed)
+        if len(files) >= 2:
+            recs = tuple(r for r in g.recommendations if r.path not in removed)
+            remaining.append(replace(g, files=files, recommendations=recs))
+    return remaining
 
 
 # -- planning guards (each is exercised by a mutation test) ---------------------------------
 
 
+def _cooperate(n: int, every: int = 256) -> None:
+    """Let other threads (a GUI event loop) take the GIL during long pure-Python loops."""
+    if n % every == 0:
+        time.sleep(0.0001)  # a real (tiny) sleep: sleep(0) can be re-won by this thread
+
+
 def _check_known_paths(
     selection: set[Path], index: dict[Path, DuplicateGroup], reasons: list[str]
 ) -> None:
-    for p in sorted(selection):
+    unknown = []
+    for n, p in enumerate(selection):
+        _cooperate(n)
         if p not in index:
-            reasons.append(f"{p}: not part of any duplicate group")
+            unknown.append(f"{p}: not part of any duplicate group")
+    reasons.extend(sorted(unknown))
 
 
 def _check_last_copy(
     selected_by_group: dict[str, set[Path]], groups: dict[str, DuplicateGroup], reasons: list[str]
 ) -> None:
-    for key, selected in selected_by_group.items():
+    for n, (key, selected) in enumerate(selected_by_group.items()):
+        _cooperate(n, 512)
         g = groups[key]
         if {f.path for f in g.files} <= selected:
             reasons.append(
@@ -139,14 +206,19 @@ def _check_last_copy(
 
 
 def _check_protected(selection: set[Path], protected: tuple[str, ...], reasons: list[str]) -> None:
-    for p in sorted(selection):
-        if is_protected(p, protected):
-            reasons.append(f"{p}: is in a protected folder")
+    if protected:
+        hits = []
+        for n, p in enumerate(selection):
+            _cooperate(n)
+            if is_protected(p, protected):
+                hits.append(f"{p}: is in a protected folder")
+        reasons.extend(sorted(hits))
 
 
 def _check_hardlink_feasible(items: list[PlannedItem]) -> str:
     """Empty string if every selected file can be replaced by a link to its target."""
-    for item in items:
+    for n, item in enumerate(items):
+        _cooperate(n, 512)
         target = item.link_target
         if target is None:
             return f"{item.entry.path}: no kept copy to link to"
@@ -162,16 +234,22 @@ def plan_actions(
     protected_folders: Iterable[str] = (),
 ) -> ActionPlan:
     groups = list(groups)
-    selected = {Path(p) for p in selection}
+    selected = selection if isinstance(selection, set) else {Path(p) for p in selection}
     protected = tuple(protected_folders)
-    index = {f.path: g for g in groups for f in g.files}
-    by_key = {_key(g): g for g in groups}
+    index: dict[Path, DuplicateGroup] = {}
+    by_key: dict[str, DuplicateGroup] = {}
+    for n, g in enumerate(groups):
+        _cooperate(n, 64)
+        by_key[_key(g)] = g
+        for f in g.files:
+            index[f.path] = g
 
     reasons: list[str] = []
     _check_known_paths(selected, index, reasons)
     _check_protected(selected, protected, reasons)
     selected_by_group: dict[str, set[Path]] = {}
-    for p in selected:
+    for n, p in enumerate(selected):
+        _cooperate(n)
         if p in index:
             selected_by_group.setdefault(_key(index[p]), set()).add(p)
     _check_last_copy(selected_by_group, by_key, reasons)
@@ -183,6 +261,7 @@ def plan_actions(
         g = by_key[key]
         keepers = tuple(f for f in g.files if f.path not in paths_)
         target = _best_keeper(g, keepers)
+        _cooperate(len(items), 64)
         for f in sorted((f for f in g.files if f.path in paths_), key=lambda f: str(f.path)):
             items.append(PlannedItem(f, g.hash, keepers, target))
     reason = _check_hardlink_feasible(items) if items else "nothing selected"
@@ -283,6 +362,7 @@ def execute(
     total = len(plan.items)
     try:
         for n, item in enumerate(plan.items):
+            _cooperate(n, 64)
             if progress is not None:
                 progress(Progress(Stage.ACTION, n, total, str(item.entry.path)))
             if cancel.cancelled:  # checked between files, after the callback had its say
@@ -301,7 +381,7 @@ def execute(
             progress(Progress(Stage.ACTION, len(results), total, ""))
     finally:
         log.close()
-    return ActionSummary(plan.mode, dry_run, tuple(results), tuple(warnings))
+    return ActionSummary.build(plan.mode, dry_run, results, warnings)
 
 
 def _execute_one(

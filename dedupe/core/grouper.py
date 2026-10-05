@@ -201,7 +201,8 @@ def group_duplicates(
         groups.append(DuplicateGroup(digest, bucket[0].size, tuple(bucket), linked))
     groups.sort(key=lambda g: (-g.reclaimable, g.hash))
 
-    hardlink_sets = tuple(
-        tuple(sorted(paths)) for _, paths in sorted(by_identity.items()) if len(paths) > 1
-    )
+    # Only identities seen more than once matter; sorting every identity would hold the GIL
+    # for ~150 ms on 100k files and freeze a GUI that is running this in a worker thread.
+    multi = [(k, v) for k, v in by_identity.items() if len(v) > 1]
+    hardlink_sets = tuple(tuple(sorted(paths)) for _, paths in sorted(multi))
     return GroupingOutcome(tuple(groups), empty, hardlink_sets, tuple(hashes.failed))

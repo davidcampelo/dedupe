@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from dedupe.core.actions import ActionPlan, Status, TrashFn
+from dedupe.core.actions import ActionPlan, TrashFn
 from dedupe.core.formatting import human
 from dedupe.core.models import DeleteMode, DuplicateGroup, Progress, ScanResult, Stage
 from dedupe.core.settings import Settings
@@ -219,14 +219,12 @@ class MainWindow(QMainWindow):
             return
         summary = outcome.summary
         self.stage_label.setText("Dry run finished" if summary.dry_run else "Deletion finished")
-        if not summary.dry_run:
-            gone = {
-                r.path for r in summary.results if r.status in (Status.DONE, Status.ALREADY_LINKED)
-            }
+        if not summary.dry_run and outcome.remaining_groups is not None:
             model = self.duplicates_tab.model
-            model.remove_paths(gone)
-            self.groups_label.setText(f"Duplicate groups: {model.group_count}")
-            self.wasted_label.setText(f"Wasted space: {human(model.reclaimable())}")
+            model.replace_groups(outcome.remaining_groups)
+            self.groups_label.setText(f"Duplicate groups: {len(outcome.remaining_groups)}")
+            wasted = sum(g.reclaimable for g in outcome.remaining_groups)
+            self.wasted_label.setText(f"Wasted space: {human(wasted)}")
         self.show_summary(format_summary(summary))
         self.action_finished.emit(summary)
 

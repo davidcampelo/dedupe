@@ -260,9 +260,9 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 **Scope:** M
 
 ## Checkpoint C: GUI slice
-- [ ] `scripts/check.sh` (full) passes; CI is green
-- [ ] Manual check against `/files`: scan → review → Trash → `actions.log` written, with `DEDUPE_STALL_LOG=1` reporting no stalls
-- [ ] 100k-file synthetic run: scan, load and dry-run delete all pass the watchdog; cancel < 1 s
+- [x] `scripts/check.sh` (full) passes (verified locally; CI not run, no remote available to the agent)
+- [ ] Manual check against `/files`: scan → review → Trash → `actions.log` written, with `DEDUPE_STALL_LOG=1` reporting no stalls (`/files` is a dangling symlink here; the automated GUI flow tests with a stubbed Trash and a 100k-file offscreen run stood in; a human should still try it on real photos)
+- [x] 100k-file synthetic run: scan, load and dry-run delete all pass the watchdog; cancel < 1 s (`tests/gui/test_scale.py`; numbers in plan.md)
 - [ ] Human review
 
 ---
