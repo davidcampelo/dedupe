@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dedupe"
+version = "0.1.0"
+description = "Find duplicate files and clean hidden/temp files, safely."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+  "PySide6>=6.6",
+  "blake3>=0.4",
+  "xxhash>=3.4",
+  "Pillow>=10",
+  "send2trash>=1.8",
+  "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+heif = ["pillow-heif>=0.16"]
+dev = [
+  "pytest>=8",
+  "pytest-qt>=4.4",
+  "pytest-cov>=5",
+  "hypothesis>=6",
+  "ruff>=0.5",
+  "mypy>=1.10",
+]
+
+[project.scripts]
+dedupe = "dedupe.cli:main"
+
+[project.gui-scripts]
+dedupe-gui = "dedupe.gui.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dedupe"]
+
+[tool.hatch.build.targets.sdist]
+include = ["dedupe", "data", "README.md"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".claude", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["dedupe"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "dedupe.core.*"
+strict = true
+
+[[tool.mypy.overrides]]
+module = "dedupe.gui.*"
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = ["slow: long-running tests excluded from the fast gate"]
+
+[tool.coverage.run]
+branch = true
