@@ -22,3 +22,11 @@ jobs:
         run: if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
       - name: Full quality gate
         run: scripts/check.sh
+      - name: Build AppImage
+        run: scripts/build_appimage.sh
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dedupe-AppImage
+          path: dist/Dedupe-*-x86_64.AppImage
+          if-no-files-found: error
