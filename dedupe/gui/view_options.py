@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from dedupe.core.models import DuplicateGroup
 from dedupe.gui.file_types import classify
@@ -16,6 +17,8 @@ class SortKey(StrEnum):
     RECLAIMABLE = "Reclaimable space"
     SIZE = "File size"
     COUNT = "Number of copies"
+    NAME = "File name"
+    PATH = "File path"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +32,11 @@ class ViewOptions:
         return self == ViewOptions()
 
 
-def _sort_key(sort: SortKey) -> Callable[[DuplicateGroup], tuple[int, int, str] | tuple[int, str]]:
+def _sort_key(sort: SortKey) -> Callable[[DuplicateGroup], tuple[Any, ...]]:
+    if sort == SortKey.NAME:
+        return lambda g: (min(f.path.name.lower() for f in g.files), g.hash)
+    if sort == SortKey.PATH:
+        return lambda g: (min(str(f.path).lower() for f in g.files), g.hash)
     if sort == SortKey.SIZE:
         return lambda g: (-g.size, -g.reclaimable, g.hash)
     if sort == SortKey.COUNT:
