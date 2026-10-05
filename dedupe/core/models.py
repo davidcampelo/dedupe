@@ -96,6 +96,12 @@ class ScanOptions:
     protected_folders: tuple[str, ...] = ()
 
 
+class DeleteMode(StrEnum):
+    TRASH = "trash"
+    PERMANENT = "permanent"
+    HARDLINK = "hardlink"
+
+
 class Verdict(StrEnum):
     KEEP = "keep"
     DELETE = "delete"

@@ -10,6 +10,7 @@ PKG = Path(__file__).resolve().parent.parent / "dedupe"
 # module path (relative to dedupe/) -> reason deletion calls are acceptable there
 ALLOWLIST: dict[str, str] = {
     "core/actions.py": "the one place that deletes user files, behind plan/guards",
+    "core/settings.py": "atomic replace of our own settings.toml (never a user file)",
 }
 
 FORBIDDEN_ATTRS = {

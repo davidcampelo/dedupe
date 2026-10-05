@@ -89,3 +89,26 @@ def test_cache_used_and_cleared(make_tree: MakeTree, capsys: pytest.CaptureFixtu
     capsys.readouterr()
     assert main(["cache", "clear"]) == 0
     assert "cleared 0 cached hashes" in capsys.readouterr().out
+
+
+def test_scan_honours_settings_file(
+    make_tree: MakeTree, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dedupe.core.settings import Settings, save_settings
+
+    root = make_tree({"a.log": "dup", "b.log": "dup", "c.txt": "dup", "d.txt": "dup"})
+    save_settings(Settings(exclude=("*.log",)))
+    assert main(["scan", str(root), "--json"]) == 0
+    files = json.loads(capsys.readouterr().out)["groups"][0]["files"]
+    assert sorted(Path(f["path"]).name for f in files) == ["c.txt", "d.txt"]
+
+
+def test_bad_settings_file_is_an_error(
+    make_tree: MakeTree, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dedupe.core import paths
+
+    paths.settings_file().parent.mkdir(parents=True)
+    paths.settings_file().write_text("min_size = true\n")
+    assert main(["scan", str(make_tree({"a": "x"}))]) == 2
+    assert "min_size" in capsys.readouterr().err

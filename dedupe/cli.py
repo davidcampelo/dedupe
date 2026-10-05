@@ -14,15 +14,9 @@ from typing import Any
 from dedupe import __version__
 from dedupe.core.cache import HashCache
 from dedupe.core.hidden import scan_hidden
-from dedupe.core.models import (
-    CancelToken,
-    DuplicateGroup,
-    FileEntry,
-    Progress,
-    ScanOptions,
-    ScanResult,
-)
+from dedupe.core.models import CancelToken, DuplicateGroup, FileEntry, Progress, ScanResult
 from dedupe.core.pipeline import run_scan
+from dedupe.core.settings import SettingsError, load_settings
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,7 +33,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="never suggest deleting files here",
     )
-    scan.add_argument("--min-size", type=int, default=1, metavar="N", help="bytes (default 1)")
+    scan.add_argument(
+        "--min-size", type=int, default=None, metavar="N", help="bytes (default: setting, else 1)"
+    )
     scan.add_argument("--exclude", action="append", default=[], metavar="GLOB")
     scan.add_argument("--json", action="store_true", help="machine-readable output")
     scan.add_argument("--paranoid", action="store_true", help="byte-compare within each group")
@@ -135,17 +131,25 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     if not root.is_dir():
         print(f"dedupe: error: not a directory: {root}", file=sys.stderr)
         return 2
-    base = ScanOptions()
+    try:
+        loaded = load_settings()
+    except SettingsError as e:
+        print(f"dedupe: error: {e}", file=sys.stderr)
+        return 2
+    for warning in loaded.warnings:
+        print(f"dedupe: warning: {warning}", file=sys.stderr)
+    base = loaded.settings.to_scan_options()
     options = replace(
         base,
-        min_size=args.min_size,
+        min_size=base.min_size if args.min_size is None else args.min_size,
         exclude=base.exclude + tuple(args.exclude),
-        paranoid=args.paranoid,
-        follow_symlinks=args.follow_symlinks,
-        cross_filesystems=args.cross_filesystems,
-        include_hidden=not args.no_hidden,
-        use_cache=not args.no_cache,
-        protected_folders=tuple(str(Path(p).resolve()) for p in args.protect),
+        paranoid=base.paranoid or args.paranoid,
+        follow_symlinks=base.follow_symlinks or args.follow_symlinks,
+        cross_filesystems=base.cross_filesystems or args.cross_filesystems,
+        include_hidden=base.include_hidden and not args.no_hidden,
+        use_cache=base.use_cache and not args.no_cache,
+        protected_folders=base.protected_folders
+        + tuple(str(Path(p).resolve()) for p in args.protect),
     )
     cancel = CancelToken()
     previous = signal.signal(signal.SIGINT, lambda *_: cancel.cancel())

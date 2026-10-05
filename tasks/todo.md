@@ -142,14 +142,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** S
 
-### Task 8: Settings
+### Task 8: Settings ✅
 
 **Description:** `core/settings.py`: XDG path helpers and a `Settings` dataclass covering every field in the spec §7 settings dialog. Loads and saves `settings.toml` (`tomllib`/`tomli-w`) with validation: unknown keys warn, wrong types fail, no `bool`-as-`int`, and falsy values are preserved. Converts to `ScanOptions`.
 
 **Acceptance criteria:**
-- [ ] Save → load round-trips to an equal object; a missing file gives the defaults
-- [ ] A misspelled key warns; a mistyped value fails with an error naming the key
-- [ ] XDG env vars are honoured with the standard fallbacks
+- [x] Save → load round-trips to an equal object; a missing file gives the defaults
+- [x] A misspelled key warns; a mistyped value fails with an error naming the key
+- [x] XDG env vars are honoured with the standard fallbacks
 
 **Dependencies:** T1
 
