@@ -58,14 +58,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** S
 
-### Task 3: Hasher and grouper
+### Task 3: Hasher and grouper ✅
 
 **Description:** `core/hasher.py`: `partial_hash` (xxh3_128 of size + head 64 KiB + tail 64 KiB) and `full_hash` (BLAKE3, 1 MiB chunks, checking cancel per chunk), run in a thread pool that reports progress in bytes. A read error moves the file to skipped. `core/grouper.py` is a chain of `GroupingStage`s: size → hardlink collapse → partial → full → optional byte compare. Empty files are returned as their own category.
 
 **Acceptance criteria:**
-- [ ] Identical content with different names/dates is grouped; same size with different content is not
-- [ ] Files that differ only in the middle (> 128 KiB, same head and tail) are separated by the full hash
-- [ ] Hard links are never deletable duplicates; empty files are not a group; paranoid mode agrees with the hash
+- [x] Identical content with different names/dates is grouped; same size with different content is not
+- [x] Files that differ only in the middle (> 128 KiB, same head and tail) are separated by the full hash
+- [x] Hard links are never deletable duplicates; empty files are not a group; paranoid mode agrees with the hash
 
 **Dependencies:** T2
 
