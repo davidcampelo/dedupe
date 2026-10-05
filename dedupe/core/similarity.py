@@ -20,11 +20,10 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from dedupe.core.models import CancelToken
+from dedupe.core.models import MAX_SIMILARITY_THRESHOLD, CancelToken
 from dedupe.core.perceptual import VARIANTS, PerceptualHash, variant
 
 HASH_BITS = 64
-MAX_THRESHOLD = 16
 GREY_ZONE_FLOOR = 12  # candidates are searched at least this far out, even for a strict threshold
 SSIM_MIN = 0.90
 SSIM_WINDOW = 7
@@ -36,7 +35,7 @@ Thumbnails = Callable[[int], "npt.NDArray[np.uint8] | None"]
 
 
 def candidate_bound(threshold: int) -> int:
-    return min(MAX_THRESHOLD, max(threshold, GREY_ZONE_FLOOR))
+    return min(MAX_SIMILARITY_THRESHOLD, max(threshold, GREY_ZONE_FLOOR))
 
 
 @dataclass(frozen=True, slots=True)

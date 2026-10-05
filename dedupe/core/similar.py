@@ -39,8 +39,6 @@ from dedupe.core.models import (
 from dedupe.core.perceptual import PerceptualHash
 from dedupe.core.recommender import quality_key, recommend_similar_all
 
-PRESETS = {"strict": 4, "normal": 8, "loose": 12}
-
 
 @dataclass(frozen=True, slots=True)
 class SimilarOutcome:

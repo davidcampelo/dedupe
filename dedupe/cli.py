@@ -15,9 +15,36 @@ from dedupe import __version__
 from dedupe.core.cache import HashCache
 from dedupe.core.formatting import human
 from dedupe.core.hidden import scan_hidden
-from dedupe.core.models import CancelToken, DuplicateGroup, FileEntry, Progress, ScanResult
+from dedupe.core.models import (
+    MAX_SIMILARITY_THRESHOLD,
+    SIMILARITY_PRESETS,
+    CancelToken,
+    DuplicateGroup,
+    FileEntry,
+    Progress,
+    ScanResult,
+    SimilarGroup,
+)
+from dedupe.core.perceptual import similar_available
 from dedupe.core.pipeline import run_scan
 from dedupe.core.settings import SettingsError, load_settings
+
+SIMILAR_MISSING = 'similar images need the optional extra: pip install "dedupe[similar]"'
+
+
+def _threshold(text: str) -> int:
+    """strict, normal, loose or a number of differing bits (0-16)."""
+    if text.lower() in SIMILARITY_PRESETS:
+        return SIMILARITY_PRESETS[text.lower()]
+    try:
+        value = int(text)
+    except ValueError:
+        value = -1
+    if not 0 <= value <= MAX_SIMILARITY_THRESHOLD:
+        raise argparse.ArgumentTypeError(
+            f"{text!r}: use strict, normal, loose or a number from 0 to {MAX_SIMILARITY_THRESHOLD}"
+        )
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,6 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--cross-filesystems", action="store_true")
     scan.add_argument("--no-cache", action="store_true", help="do not read or write the hash cache")
     scan.add_argument("--no-hidden", action="store_true", help="skip hidden files")
+    scan.add_argument(
+        "--similar", action="store_true", help="also find near-identical images (dedupe[similar])"
+    )
+    scan.add_argument(
+        "--threshold",
+        type=_threshold,
+        default=None,
+        metavar="{strict,normal,loose,N}",
+        help="how different similar images may be: 4, 8 (default) or 12 bits, or N from 0 to 16",
+    )
     hidden = sub.add_parser("hidden", help="list hidden and temporary files (never deletes)")
     hidden.add_argument("path", type=Path)
     hidden.add_argument("--json", action="store_true", help="machine-readable output")
@@ -65,7 +102,39 @@ def _file_json(g: DuplicateGroup, f: FileEntry) -> dict[str, Any]:
     }
 
 
-def result_to_json(result: ScanResult) -> dict[str, Any]:
+def _similar_json(g: SimilarGroup) -> dict[str, Any]:
+    verdicts = {r.path: r for r in g.recommendations}
+    return {
+        "id": g.id,
+        "reclaimable": g.reclaimable,
+        "members": [
+            {
+                "path": str(m.entry.path),
+                "size": m.entry.size,
+                "mtime_ns": m.entry.mtime_ns,
+                "width": m.width,
+                "height": m.height,
+                "distance": m.distance,
+                "similarity": round(m.similarity, 4),
+                "aliases": [str(a) for a in m.aliases],
+                "verdict": v.verdict.value if (v := verdicts.get(m.entry.path)) else None,
+                "reason": v.reason if v else None,
+            }
+            for m in g.members
+        ],
+    }
+
+
+def result_to_json(result: ScanResult, similar: bool = False) -> dict[str, Any]:
+    """``similar_groups`` is added only when the similar-images search ran, so the output of a
+    scan without ``--similar`` is exactly what it was before the feature existed."""
+    data = _exact_json(result)
+    if similar:
+        data["similar_groups"] = [_similar_json(g) for g in result.similar_groups]
+    return data
+
+
+def _exact_json(result: ScanResult) -> dict[str, Any]:
     return {
         "root": str(result.root),
         "files_scanned": result.files_scanned,
@@ -89,7 +158,7 @@ def result_to_json(result: ScanResult) -> dict[str, Any]:
     }
 
 
-def print_table(result: ScanResult, out: Any = None) -> None:
+def print_table(result: ScanResult, out: Any = None, similar: bool = False) -> None:
     out = out or sys.stdout
     print(
         f"{result.files_scanned} files scanned, {len(result.groups)} duplicate groups, "
@@ -108,6 +177,8 @@ def print_table(result: ScanResult, out: Any = None) -> None:
             print(f"  {tag}{f.path}{note}", file=out)
         for p in g.hardlinked:
             print(f"  {p}  (hard link)", file=out)
+    if similar:
+        _print_similar(result, out)
     if result.empty_files:
         print(f"\n{len(result.empty_files)} empty files", file=out)
     if result.hardlink_sets:
@@ -116,6 +187,27 @@ def print_table(result: ScanResult, out: Any = None) -> None:
         print(f"\n{len(result.skipped)} skipped:", file=out)
         for s in result.skipped:
             print(f"  {s.path}: {s.reason}", file=out)
+
+
+def _print_similar(result: ScanResult, out: Any) -> None:
+    print(
+        f"\nSimilar images: {len(result.similar_groups)} groups, "
+        f"{human(result.similar_reclaimable)} reclaimable "
+        "(these are different files: review before deleting)",
+        file=out,
+    )
+    for g in result.similar_groups:
+        print(f"\n{g.id}  {len(g.members)} images  ({human(g.reclaimable)})", file=out)
+        verdicts = {r.path: r for r in g.recommendations}
+        for m in g.members:
+            rec = verdicts.get(m.entry.path)
+            tag = f"[{rec.verdict.value.upper()}] " if rec else ""
+            exact = f"  +{len(m.aliases)} exact copies" if m.aliases else ""
+            print(
+                f"  {tag}{m.entry.path}  {m.width}x{m.height}  {human(m.entry.size)}  "
+                f"{m.similarity:.0%} similar{exact}",
+                file=out,
+            )
 
 
 def _cmd_scan(args: argparse.Namespace) -> int:
@@ -131,6 +223,13 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     for warning in loaded.warnings:
         print(f"dedupe: warning: {warning}", file=sys.stderr)
     base = loaded.settings.to_scan_options()
+    similar = base.similar_images or args.similar
+    if similar and not similar_available():
+        if args.similar:
+            print(f"dedupe: error: {SIMILAR_MISSING}", file=sys.stderr)
+            return 2
+        print(f"dedupe: warning: {SIMILAR_MISSING}; skipping them", file=sys.stderr)
+        similar = False
     options = replace(
         base,
         min_size=base.min_size if args.min_size is None else args.min_size,
@@ -142,6 +241,10 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         use_cache=base.use_cache and not args.no_cache,
         protected_folders=base.protected_folders
         + tuple(str(Path(p).resolve()) for p in args.protect),
+        similar_images=similar,
+        similarity_threshold=(
+            base.similarity_threshold if args.threshold is None else args.threshold
+        ),
     )
     cancel = CancelToken()
     previous = signal.signal(signal.SIGINT, lambda *_: cancel.cancel())
@@ -165,10 +268,10 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         print("dedupe: cancelled", file=sys.stderr)
         return 130
     if args.json:
-        json.dump(result_to_json(result), sys.stdout, indent=2)
+        json.dump(result_to_json(result, options.similar_images), sys.stdout, indent=2)
         print()
     else:
-        print_table(result)
+        print_table(result, similar=options.similar_images)
     return 0
 
 

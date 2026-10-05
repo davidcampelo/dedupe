@@ -20,6 +20,11 @@ DEFAULT_EXCLUDES: tuple[str, ...] = (
 )
 
 
+# Similar images: how many of 64 hash bits may differ (the preset names are shown to users).
+SIMILARITY_PRESETS: dict[str, int] = {"strict": 4, "normal": 8, "loose": 12}
+MAX_SIMILARITY_THRESHOLD = 16
+
+
 class Stage(StrEnum):
     WALK = "walk"
     SIZE = "size"

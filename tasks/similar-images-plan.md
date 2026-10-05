@@ -213,9 +213,9 @@ The similar chain inside `run_scan`; `SimilarGroup` and `SimilarMember`; the qua
 
 **Scope:** M
 
-#### Task S7: CLI
-- [ ] `--similar` and `--threshold` work; the JSON snapshot is byte-identical when `--similar` is off
-- [ ] Without the extra, `--similar` exits with code 2 and "install dedupe[similar]"
+#### Task S7: CLI ✅
+- [x] `--similar` and `--threshold` work; the JSON snapshot is byte-identical when `--similar` is off
+- [x] Without the extra, `--similar` exits with code 2 and "install dedupe[similar]"
 
 **Scope:** S
 
