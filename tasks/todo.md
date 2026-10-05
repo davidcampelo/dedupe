@@ -206,7 +206,7 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 **Acceptance criteria:**
 - [x] Every mockup icon exists and loads to a non-null `QIcon`
 - [x] Icons are legible on light and dark palettes
-- [x] A contact sheet (`scripts/render_icons.py`) next to the mockup has been approved by the human
+- [ ] A contact sheet (`scripts/render_icons.py`) next to the mockup has been approved by the human (sheet rendered and checked by the agent; awaiting human approval)
 
 **Dependencies:** T1
 
