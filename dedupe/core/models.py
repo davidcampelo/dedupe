@@ -26,6 +26,7 @@ class Stage(StrEnum):
     PARTIAL = "partial hash"
     FULL = "full hash"
     COMPARE = "byte compare"
+    SIMILAR = "image similarity"
     RECOMMEND = "recommend"
     HIDDEN = "hidden scan"
     ACTION = "action"

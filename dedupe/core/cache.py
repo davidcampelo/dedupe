@@ -25,13 +25,21 @@ CREATE TABLE IF NOT EXISTS hashes (
     inode INTEGER NOT NULL,
     device INTEGER NOT NULL,
     partial TEXT,
-    full TEXT
+    full TEXT,
+    perceptual TEXT,
+    perceptual_algo TEXT
 )
 """
 
+# Columns added after the first release; an existing database gets them with ALTER TABLE.
+MIGRATIONS = (
+    ("perceptual", "ALTER TABLE hashes ADD COLUMN perceptual TEXT"),
+    ("perceptual_algo", "ALTER TABLE hashes ADD COLUMN perceptual_algo TEXT"),
+)
+
 UPSERT = """
-INSERT INTO hashes (path, size, mtime_ns, inode, device, partial, full)
-VALUES (:path, :size, :mtime_ns, :inode, :device, :partial, :full)
+INSERT INTO hashes (path, size, mtime_ns, inode, device, partial, full, perceptual, perceptual_algo)
+VALUES (:path, :size, :mtime_ns, :inode, :device, :partial, :full, :perceptual, :perceptual_algo)
 ON CONFLICT(path) DO UPDATE SET
     partial = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns
                     AND inode = excluded.inode AND device = excluded.device
@@ -39,6 +47,14 @@ ON CONFLICT(path) DO UPDATE SET
     full = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns
                  AND inode = excluded.inode AND device = excluded.device
                 THEN COALESCE(excluded.full, full) ELSE excluded.full END,
+    perceptual = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns
+                       AND inode = excluded.inode AND device = excluded.device
+                      THEN COALESCE(excluded.perceptual, perceptual)
+                      ELSE excluded.perceptual END,
+    perceptual_algo = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns
+                            AND inode = excluded.inode AND device = excluded.device
+                           THEN COALESCE(excluded.perceptual_algo, perceptual_algo)
+                           ELSE excluded.perceptual_algo END,
     size = excluded.size, mtime_ns = excluded.mtime_ns,
     inode = excluded.inode, device = excluded.device
 """
@@ -62,6 +78,7 @@ class HashCache:
             conn = self._connect()
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(SCHEMA)
+            self._migrate(conn)
             conn.commit()
             conn.close()
         except (sqlite3.Error, OSError) as e:
@@ -88,14 +105,15 @@ class HashCache:
                 chunk = keys[i : i + LOOKUP_CHUNK]
                 marks = ",".join("?" * len(chunk))
                 rows = conn.execute(
-                    "SELECT path, size, mtime_ns, inode, device, partial, full "
+                    "SELECT path, size, mtime_ns, inode, device, partial, full, "
+                    "perceptual, perceptual_algo "
                     f"FROM hashes WHERE path IN ({marks})",
                     chunk,
                 )
-                for path, size, mtime_ns, inode, device, partial, full in rows:
+                for path, size, mtime_ns, inode, device, partial, full, perc, algo in rows:
                     e = by_path[path]
                     if (e.size, e.mtime_ns, e.inode, e.device) == (size, mtime_ns, inode, device):
-                        found[e.path] = CachedHashes(partial, full)
+                        found[e.path] = CachedHashes(partial, full, perc, algo)
         except sqlite3.Error as e:
             self._disable(f"hash cache read failed ({e}); continuing without it")
             return {}
@@ -106,6 +124,10 @@ class HashCache:
 
     def put_full(self, entry: FileEntry, value: str) -> None:
         self._put(entry, None, value)
+
+    def put_perceptual(self, entry: FileEntry, value: str, algo: str) -> None:
+        """``algo`` is the perceptual cache stamp; a reader only trusts a matching stamp."""
+        self._put(entry, None, None, value, algo)
 
     # -- housekeeping --------------------------------------------------------------------
 
@@ -139,6 +161,17 @@ class HashCache:
 
     # -- internals -----------------------------------------------------------------------
 
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        have = {row[1] for row in conn.execute("PRAGMA table_info(hashes)")}
+        for column, ddl in MIGRATIONS:
+            if column not in have:
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e):  # another process migrated first
+                        raise
+
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path, timeout=self.timeout)
 
@@ -148,7 +181,14 @@ class HashCache:
             conn = self._local.conn = self._connect()
         return conn
 
-    def _put(self, entry: FileEntry, partial: str | None, full: str | None) -> None:
+    def _put(
+        self,
+        entry: FileEntry,
+        partial: str | None,
+        full: str | None,
+        perceptual: str | None = None,
+        perceptual_algo: str | None = None,
+    ) -> None:
         if not self.enabled:
             return
         self._queue.put(
@@ -160,6 +200,8 @@ class HashCache:
                 "device": entry.device,
                 "partial": partial,
                 "full": full,
+                "perceptual": perceptual,
+                "perceptual_algo": perceptual_algo,
             }
         )
 

@@ -9,11 +9,12 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import blake3
 import xxhash
 
+from dedupe.core.imaging import ImageLoadError
 from dedupe.core.models import (
     CancelToken,
     FileEntry,
@@ -23,14 +24,22 @@ from dedupe.core.models import (
     Stage,
 )
 
+if TYPE_CHECKING:
+    from dedupe.core.perceptual import PerceptualHash
+
 PARTIAL_BYTES = 64 * 1024
 CHUNK = 1024 * 1024
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
 class CachedHashes:
     partial: str | None = None
     full: str | None = None
+    perceptual: str | None = None  # PerceptualHash.encode(); only valid for ``perceptual_algo``
+    perceptual_algo: str | None = None
 
 
 class HashStore(Protocol):
@@ -39,6 +48,7 @@ class HashStore(Protocol):
     def get_many(self, entries: Sequence[FileEntry]) -> dict[Path, CachedHashes]: ...
     def put_partial(self, entry: FileEntry, value: str) -> None: ...
     def put_full(self, entry: FileEntry, value: str) -> None: ...
+    def put_perceptual(self, entry: FileEntry, value: str, algo: str) -> None: ...
 
 
 def partial_hash(path: Path, size: int, cancel: CancelToken | None = None) -> str:
@@ -116,6 +126,30 @@ class HashService:
         cached = self._lookup(entries, lambda h: h.full)
         return self._run(Stage.FULL, entries, cached, lambda e: e.size, self._full_one)
 
+    def perceptual(self, entries: Iterable[FileEntry]) -> dict[Path, PerceptualHash]:
+        """Perceptual hashes of images, decoded at most once per file and cached. Undecodable
+        images go to ``failed`` and are omitted; flat images come back with ``usable`` False."""
+        from dedupe.core import perceptual as perc  # lazy: needs the optional ``similar`` extra
+
+        entries = list(entries)
+        stamp = perc.cache_stamp()
+        cached: dict[Path, PerceptualHash] = {}
+        if self.store is not None:
+            for path, found in self.store.get_many(entries).items():
+                if found.perceptual is not None and found.perceptual_algo == stamp:
+                    decoded = perc.PerceptualHash.decode(found.perceptual)
+                    if decoded is not None:
+                        cached[path] = decoded
+
+        def work(e: FileEntry, advance: Callable[[int, str], None]) -> PerceptualHash:
+            value = perc.perceptual_hash(e.path)
+            advance(1, str(e.path))
+            if self.store:
+                self.store.put_perceptual(e, value.encode(), stamp)
+            return value
+
+        return self._run(Stage.SIMILAR, entries, cached, lambda e: 1, work)
+
     # -- workers -------------------------------------------------------------------------
 
     def _lookup(
@@ -151,13 +185,13 @@ class HashService:
         self,
         stage: Stage,
         entries: list[FileEntry],
-        cached: dict[Path, str],
+        cached: dict[Path, T],
         weight: Callable[[FileEntry], int],
-        work: Callable[[FileEntry, Callable[[int, str], None]], str],
-    ) -> dict[Path, str]:
+        work: Callable[[FileEntry, Callable[[int, str], None]], T],
+    ) -> dict[Path, T]:
         total = sum(weight(e) for e in entries)
         done = sum(weight(e) for e in entries if e.path in cached)
-        out: dict[Path, str] = dict(cached)
+        out: dict[Path, T] = dict(cached)
         todo = [e for e in entries if e.path not in cached]
 
         def advance(n: int, current: str) -> None:
@@ -168,8 +202,8 @@ class HashService:
             if self.progress is not None:
                 self.progress(Progress(stage, snapshot, total, current))
 
-        def run_batch(batch: list[FileEntry]) -> list[tuple[FileEntry, str | None, OSError | None]]:
-            results: list[tuple[FileEntry, str | None, OSError | None]] = []
+        def run_batch(batch: list[FileEntry]) -> list[tuple[FileEntry, T | None, OSError | None]]:
+            results: list[tuple[FileEntry, T | None, OSError | None]] = []
             for e in batch:
                 self.cancel.raise_if_cancelled()
                 try:
@@ -181,7 +215,7 @@ class HashService:
         if self.progress is not None:
             self.progress(Progress(stage, done, total, ""))
         batches = _batches(todo)
-        in_flight: set[Future[list[tuple[FileEntry, str | None, OSError | None]]]] = set()
+        in_flight: set[Future[list[tuple[FileEntry, T | None, OSError | None]]]] = set()
         pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="hash")
         try:
             # Bounded submission keeps cancellation latency low on huge inputs.
@@ -224,6 +258,8 @@ def _batches(entries: list[FileEntry]) -> Iterator[list[FileEntry]]:
 
 
 def _reason(e: OSError) -> str:
+    if isinstance(e, ImageLoadError):
+        return e.reason
     if isinstance(e, PermissionError):
         return "permission denied"
     if isinstance(e, FileNotFoundError):

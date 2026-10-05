@@ -180,8 +180,8 @@ Similar images are **different files**. Every rule that relies on "the content s
 
 **Scope:** M
 
-#### Task S3: Cache columns
-- [ ] An existing database migrates in place; a changed mtime invalidates the entry; a different cache stamp (`ALGO_VERSION`, `imagehash` or Pillow version) invalidates it; a broken database degrades with a warning and the scan still succeeds
+#### Task S3: Cache columns ✅
+- [x] An existing database migrates in place; a changed mtime invalidates the entry; a different cache stamp (`ALGO_VERSION`, `imagehash` or Pillow version) invalidates it; a broken database degrades with a warning and the scan still succeeds
 
 **Scope:** S
 
