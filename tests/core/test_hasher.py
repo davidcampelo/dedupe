@@ -85,11 +85,10 @@ class FakeStore:
     def __init__(self) -> None:
         self.data: dict[Path, tuple[str | None, str | None]] = {}
 
-    def get(self, entry: FileEntry):  # type: ignore[no-untyped-def]
+    def get_many(self, entries):  # type: ignore[no-untyped-def]
         from dedupe.core.hasher import CachedHashes
 
-        hit = self.data.get(entry.path)
-        return CachedHashes(*hit) if hit else None
+        return {e.path: CachedHashes(*self.data[e.path]) for e in entries if e.path in self.data}
 
     def put_partial(self, entry: FileEntry, value: str) -> None:
         self.data[entry.path] = (value, (self.data.get(entry.path) or (None, None))[1])

@@ -15,6 +15,7 @@ import os
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path, PurePath
 
 from dedupe.core.models import DuplicateGroup, FileEntry, Recommendation, Verdict
@@ -37,11 +38,16 @@ def is_protected(path: PurePath, protected_folders: Iterable[str]) -> bool:
 
 
 def in_disposable_folder(path: Path, root: Path | None = None) -> bool:
-    parent = path.parent
-    if root is not None and is_under(parent, root):
-        parts = parent.relative_to(os.path.abspath(root)).parts
+    return _disposable_dir(os.path.dirname(path), str(root) if root is not None else None)
+
+
+@lru_cache(maxsize=65536)
+def _disposable_dir(parent: str, root: str | None) -> bool:
+    """Whole-folder answer, cached: thousands of files share a handful of folders."""
+    if root is not None and is_under(PurePath(parent), root):
+        parts = PurePath(parent).relative_to(os.path.abspath(root)).parts
     else:
-        parts = parent.parts
+        parts = PurePath(parent).parts
     return any(
         token in DISPOSABLE_WORDS
         for part in parts

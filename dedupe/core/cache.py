@@ -10,6 +10,7 @@ from __future__ import annotations
 import queue
 import sqlite3
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 from dedupe.core import paths
@@ -43,6 +44,7 @@ ON CONFLICT(path) DO UPDATE SET
 """
 
 BATCH = 500
+LOOKUP_CHUNK = 500  # stays under SQLite's bound-variable limit
 
 
 class HashCache:
@@ -71,22 +73,33 @@ class HashCache:
     # -- public API (HashStore) ----------------------------------------------------------
 
     def get(self, entry: FileEntry) -> CachedHashes | None:
-        if not self.enabled:
-            return None
+        return self.get_many([entry]).get(entry.path)
+
+    def get_many(self, entries: Sequence[FileEntry]) -> dict[Path, CachedHashes]:
+        """Cached hashes for entries whose full key (path, size, mtime, inode, device) matches."""
+        if not self.enabled or not entries:
+            return {}
+        by_path = {str(e.path): e for e in entries}
+        keys = list(by_path)
+        found: dict[Path, CachedHashes] = {}
         try:
-            row = (
-                self._reader()
-                .execute(
-                    "SELECT partial, full FROM hashes WHERE path=? AND size=? AND mtime_ns=? "
-                    "AND inode=? AND device=?",
-                    (str(entry.path), entry.size, entry.mtime_ns, entry.inode, entry.device),
+            conn = self._reader()
+            for i in range(0, len(keys), LOOKUP_CHUNK):
+                chunk = keys[i : i + LOOKUP_CHUNK]
+                marks = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    "SELECT path, size, mtime_ns, inode, device, partial, full "
+                    f"FROM hashes WHERE path IN ({marks})",
+                    chunk,
                 )
-                .fetchone()
-            )
+                for path, size, mtime_ns, inode, device, partial, full in rows:
+                    e = by_path[path]
+                    if (e.size, e.mtime_ns, e.inode, e.device) == (size, mtime_ns, inode, device):
+                        found[e.path] = CachedHashes(partial, full)
         except sqlite3.Error as e:
             self._disable(f"hash cache read failed ({e}); continuing without it")
-            return None
-        return CachedHashes(row[0], row[1]) if row else None
+            return {}
+        return found
 
     def put_partial(self, entry: FileEntry, value: str) -> None:
         self._put(entry, value, None)

@@ -142,6 +142,18 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 ### Parallelization
 After T4, these tasks are independent and can run in parallel: T5, T7 and T8. T6 depends only on models. T11 can run any time after T1. T16, T17 and T19 can run in parallel after T14.
 
+## Recorded measurements
+
+**Checkpoint B benchmark** (`python scripts/bench.py`, 100,000 synthetic files, ~half are copies; 6-core devcontainer, overlay filesystem):
+
+| Run | Time | Notes |
+|---|---|---|
+| Cold (empty cache) | 36.9 s | 14,800 duplicate groups, 1.58 GB reclaimable |
+| Warm (cache populated) | 4.8 s | zero bytes hashed; the time is the walk, grouping and recommending |
+| Cancel latency | 0.04 s | from the token firing to `run_scan` returning |
+
+Profiling found three early bottlenecks that were fixed before this record: one future per file (now batched), one SQLite query per file (now bulk `get_many`), and a per-file folder-name check in the recommender (now cached per folder). Warm time went from 16.6 s to 4.8 s.
+
 ## Risks and mitigations
 
 | Risk | Impact | Mitigation |
