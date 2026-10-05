@@ -206,10 +206,10 @@ The similar chain inside `run_scan`; `SimilarGroup` and `SimilarMember`; the qua
 
 **Scope:** M
 
-#### Task S6: Actions and guards
+#### Task S6: Actions and guards ✅
 `plan_similar_actions`, `_check_last_copy_similar`, the hard-link refusal, `similar_groups_after`.
-- [ ] Hard links are refused; selecting the last copy (including aliases) is refused; a protected file is refused. Each has a mutation test
-- [ ] Execution re-checks the keeper and every selected file with `_verify_unchanged`
+- [x] Hard links are refused; selecting the last copy (including aliases) is refused; a protected file is refused. Each has a mutation test
+- [x] Execution re-checks the keeper and every selected file with `_verify_unchanged`
 
 **Scope:** M
 

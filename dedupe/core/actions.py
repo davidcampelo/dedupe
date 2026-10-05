@@ -21,7 +21,7 @@ import os
 import shutil
 import stat
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -41,6 +41,7 @@ from dedupe.core.models import (
     FileEntry,
     Progress,
     ProgressCallback,
+    SimilarGroup,
     Stage,
     Verdict,
 )
@@ -79,6 +80,7 @@ class PlannedItem:
     link_target: FileEntry | None = None  # hardlink mode: the copy that stays
     requires_keeper: bool = True  # False only for hidden/temp files, which have no twin
     is_dir: bool = False
+    similar: bool = False  # a similar (not identical) image: hard links are never allowed
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,17 +179,46 @@ def groups_after(
     return remaining
 
 
+def similar_groups_after(
+    groups: Iterable[SimilarGroup], removed: set[Path] | frozenset[Path]
+) -> list[SimilarGroup]:
+    """The similar groups that remain once ``removed`` files are gone, from either tab. A removed
+    path also leaves the ``aliases`` of the members that stand for it. A group left with fewer
+    than two members is no longer a group."""
+    remaining: list[SimilarGroup] = []
+    for n, g in enumerate(groups):
+        _cooperate(n, 512)
+        touched = any(
+            m.entry.path in removed or not removed.isdisjoint(m.aliases) for m in g.members
+        )
+        if not touched:
+            remaining.append(g)
+            continue
+        members = tuple(
+            replace(m, aliases=tuple(a for a in m.aliases if a not in removed))
+            for m in g.members
+            if m.entry.path not in removed
+        )
+        if len(members) >= 2:
+            recs = tuple(r for r in g.recommendations if r.path not in removed)
+            remaining.append(replace(g, members=members, recommendations=recs))
+    return remaining
+
+
 # -- planning guards (each is exercised by a mutation test) ---------------------------------
 
 
 def _check_known_paths(
-    selection: set[Path], index: dict[Path, DuplicateGroup], reasons: list[str]
+    selection: set[Path],
+    index: Mapping[Path, object],
+    reasons: list[str],
+    kind: str = "duplicate",
 ) -> None:
     unknown = []
     for n, p in enumerate(selection):
         _cooperate(n)
         if p not in index:
-            unknown.append(f"{p}: not part of any duplicate group")
+            unknown.append(f"{p}: not part of any {kind} group")
     reasons.extend(sorted(unknown))
 
 
@@ -202,6 +233,30 @@ def _check_last_copy(
                 f"every copy of {g.files[0].path.name} ({g.hash[:12]}) is selected; "
                 "at least one copy must be kept"
             )
+
+
+def _check_last_copy_similar(
+    selected_by_group: dict[str, set[Path]], groups: dict[str, SimilarGroup], reasons: list[str]
+) -> None:
+    """Similar images are different files: deleting one does not preserve its content anywhere
+    else, so at least one member of every group must stay (and is re-verified before acting)."""
+    for n, (key, selected) in enumerate(selected_by_group.items()):
+        _cooperate(n, 512)
+        g = groups[key]
+        if {m.entry.path for m in g.members} <= selected:
+            reasons.append(
+                f"every image in the similar group of {g.members[0].entry.path.name} is "
+                "selected; at least one must be kept"
+            )
+
+
+def _refuse_hardlink_for_similar(mode: DeleteMode, reasons: list[str]) -> None:
+    """A hard link would replace one image with another's content."""
+    if mode is DeleteMode.HARDLINK:
+        reasons.append(
+            "hard links are never used for similar images: they are different pictures, "
+            "so linking would replace one with the other"
+        )
 
 
 def _check_protected(selection: set[Path], protected: tuple[str, ...], reasons: list[str]) -> None:
@@ -270,6 +325,49 @@ def plan_actions(
     return plan
 
 
+def plan_similar_actions(
+    groups: Iterable[SimilarGroup],
+    selection: Iterable[Path],
+    mode: DeleteMode = DeleteMode.TRASH,
+    protected_folders: Iterable[str] = (),
+) -> ActionPlan:
+    """Plan removal of similar images. Stricter than ``plan_actions``: the files differ, so hard
+    links are refused outright and at least one member of every group must stay."""
+    groups = list(groups)
+    selected = selection if isinstance(selection, set) else {Path(p) for p in selection}
+    protected = tuple(protected_folders)
+    index: dict[Path, SimilarGroup] = {}
+    for n, g in enumerate(groups):
+        _cooperate(n, 64)
+        for m in g.members:
+            index[m.entry.path] = g
+
+    reasons: list[str] = []
+    _refuse_hardlink_for_similar(mode, reasons)
+    _check_known_paths(selected, index, reasons, "similar")
+    _check_protected(selected, protected, reasons)
+    by_id = {g.id: g for g in groups}
+    selected_by_group: dict[str, set[Path]] = {}
+    for n, p in enumerate(selected):
+        _cooperate(n)
+        if p in index:
+            selected_by_group.setdefault(index[p].id, set()).add(p)
+    _check_last_copy_similar(selected_by_group, by_id, reasons)
+    if reasons:
+        raise PlanRefused(reasons)
+
+    items: list[PlannedItem] = []
+    for key, paths_ in sorted(selected_by_group.items()):
+        g = by_id[key]
+        keepers = tuple(m.entry for m in g.members if m.entry.path not in paths_)
+        _cooperate(len(items), 64)
+        for m in sorted(
+            (m for m in g.members if m.entry.path in paths_), key=lambda m: str(m.entry.path)
+        ):
+            items.append(PlannedItem(m.entry, g.id, keepers, None, similar=True))
+    return ActionPlan(mode, tuple(items), False, "hard links are never used for similar images")
+
+
 def plan_hidden_actions(
     items: Iterable[HiddenItem],
     mode: DeleteMode = DeleteMode.TRASH,
@@ -310,6 +408,10 @@ def plan_hidden_actions(
         for i in sorted({i.path: i for i in items}.values(), key=lambda i: str(i.path))
     ]
     return ActionPlan(mode, tuple(planned), False, "hard links do not apply to hidden files")
+
+
+def _by_path(e: FileEntry) -> str:
+    return str(e.path)
 
 
 def _key(g: DuplicateGroup) -> str:
@@ -438,6 +540,8 @@ def _execute_one(
     if problem:
         return ActionResult(entry.path, entry.size, Status.CHANGED, problem)
     keeper: FileEntry | None = None
+    if item.similar and mode is DeleteMode.HARDLINK:  # defence in depth: planning refuses it
+        return ActionResult(entry.path, entry.size, Status.FAILED, "hard links never apply here")
     if item.requires_keeper:
         keeper = _verify_keeper(
             (item.link_target,)
