@@ -102,7 +102,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 - [ ] T1: Project scaffold, models, tooling, test isolation, deletion-audit test
 - [x] T2: Scanner (walk, symlinks, exclusions, skipped list, cancel)
 - [x] T3: Hasher + grouper (size → hardlink → partial → full → paranoid, empty files)
-- [ ] T4: `run_scan` pipeline + `dedupe scan --json` CLI
+- [x] T4: `run_scan` pipeline + `dedupe scan --json` CLI
 
 **Checkpoint A:** `dedupe scan` gives correct groups on fixtures and on `/files`; the full gate passes.
 

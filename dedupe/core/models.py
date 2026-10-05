@@ -127,6 +127,7 @@ class ScanResult:
     root: Path
     groups: tuple[DuplicateGroup, ...] = ()
     empty_files: tuple[FileEntry, ...] = ()
+    hardlink_sets: tuple[tuple[Path, ...], ...] = ()
     skipped: tuple[SkippedEntry, ...] = ()
     files_scanned: int = 0
     cancelled: bool = False

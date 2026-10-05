@@ -73,14 +73,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 4: Pipeline and `dedupe scan` CLI
+### Task 4: Pipeline and `dedupe scan` CLI ✅
 
 **Description:** `core/pipeline.py` `run_scan(...) -> ScanResult`. `cli.py` adds `dedupe scan PATH [--min-size N] [--exclude GLOB]... [--json]`, with a table by default and a stable JSON schema with `--json`. Ctrl-C triggers the cancel token.
 
 **Acceptance criteria:**
-- [ ] The JSON lists groups (hash, size, paths, reclaimable), empty files and skipped entries
-- [ ] A bad path gives a non-zero exit code; Ctrl-C exits cleanly
-- [ ] Running on `/files` completes with plausible results
+- [x] The JSON lists groups (hash, size, paths, reclaimable), empty files and skipped entries
+- [x] A bad path gives a non-zero exit code; Ctrl-C exits cleanly
+- [x] Running on `/files` completes with plausible results
 
 **Dependencies:** T3
 
