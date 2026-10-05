@@ -1,0 +1,366 @@
+"""Deleting duplicates: plan first (refuse unsafe selections), then execute.
+
+Safety design (this is the only module allowed to remove files; see test_deletion_audit):
+
+* ``plan_actions`` never touches the disk. It REFUSES (raises ``PlanRefused``) any selection
+  that would remove every copy of a group, touches a protected path, names a file that is not
+  in a group, or asks for hard links across filesystems.
+* ``execute`` re-verifies each file immediately before acting (still a regular file with the
+  same size, mtime, inode and device as at scan time) and that at least one *kept* copy is
+  still unchanged. Changed files are skipped and reported, never acted on.
+* Trash failures are reported per file. There is NEVER a fallback to permanent deletion.
+* A dry run goes through the same plan and verification and skips only the mutation.
+* The action log is opened before the first mutation; if it cannot be, nothing is touched.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import stat
+import uuid
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from pathlib import Path
+from typing import IO
+
+import send2trash
+
+from dedupe.core import paths
+from dedupe.core.models import (
+    CancelToken,
+    DeleteMode,
+    DuplicateGroup,
+    FileEntry,
+    Progress,
+    ProgressCallback,
+    Stage,
+    Verdict,
+)
+from dedupe.core.recommender import is_protected
+
+TrashFn = Callable[[str], None]
+
+
+class PlanRefused(Exception):
+    """The selection is unsafe. ``reasons`` lists every problem found; nothing was changed."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        super().__init__("; ".join(reasons))
+        self.reasons = reasons
+
+
+class ActionError(Exception):
+    """Execution could not start safely (e.g. the action log cannot be opened)."""
+
+
+class Status(StrEnum):
+    DONE = "done"
+    DRY_RUN = "would act"
+    CHANGED = "changed since scan"
+    KEEPER_CHANGED = "kept copy missing or changed"
+    FAILED = "failed"
+    NOT_RUN = "not run (cancelled)"
+    ALREADY_LINKED = "already hard-linked"
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedItem:
+    entry: FileEntry
+    group_hash: str
+    keepers: tuple[FileEntry, ...]  # group members not selected for removal
+    link_target: FileEntry | None = None  # hardlink mode: the copy that stays
+
+
+@dataclass(frozen=True, slots=True)
+class ActionPlan:
+    mode: DeleteMode
+    items: tuple[PlannedItem, ...]
+    hardlink_possible: bool
+    hardlink_reason: str = ""
+
+    @property
+    def total_size(self) -> int:
+        return sum(i.entry.size for i in self.items)
+
+
+@dataclass(frozen=True, slots=True)
+class ActionResult:
+    path: Path
+    size: int
+    status: Status
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ActionSummary:
+    mode: DeleteMode
+    dry_run: bool
+    results: tuple[ActionResult, ...]
+    warnings: tuple[str, ...] = ()
+
+    def count(self, status: Status) -> int:
+        return sum(r.status is status for r in self.results)
+
+    @property
+    def done(self) -> int:
+        return self.count(Status.DRY_RUN if self.dry_run else Status.DONE)
+
+    @property
+    def freed(self) -> int:
+        ok = Status.DRY_RUN if self.dry_run else Status.DONE
+        return sum(r.size for r in self.results if r.status is ok)
+
+
+# -- planning guards (each is exercised by a mutation test) ---------------------------------
+
+
+def _check_known_paths(
+    selection: set[Path], index: dict[Path, DuplicateGroup], reasons: list[str]
+) -> None:
+    for p in sorted(selection):
+        if p not in index:
+            reasons.append(f"{p}: not part of any duplicate group")
+
+
+def _check_last_copy(
+    selected_by_group: dict[str, set[Path]], groups: dict[str, DuplicateGroup], reasons: list[str]
+) -> None:
+    for key, selected in selected_by_group.items():
+        g = groups[key]
+        if {f.path for f in g.files} <= selected:
+            reasons.append(
+                f"every copy of {g.files[0].path.name} ({g.hash[:12]}) is selected; "
+                "at least one copy must be kept"
+            )
+
+
+def _check_protected(selection: set[Path], protected: tuple[str, ...], reasons: list[str]) -> None:
+    for p in sorted(selection):
+        if is_protected(p, protected):
+            reasons.append(f"{p}: is in a protected folder")
+
+
+def _check_hardlink_feasible(items: list[PlannedItem]) -> str:
+    """Empty string if every selected file can be replaced by a link to its target."""
+    for item in items:
+        target = item.link_target
+        if target is None:
+            return f"{item.entry.path}: no kept copy to link to"
+        if target.device != item.entry.device:
+            return f"{item.entry.path}: on a different filesystem than {target.path}"
+    return ""
+
+
+def plan_actions(
+    groups: Iterable[DuplicateGroup],
+    selection: Iterable[Path],
+    mode: DeleteMode = DeleteMode.TRASH,
+    protected_folders: Iterable[str] = (),
+) -> ActionPlan:
+    groups = list(groups)
+    selected = {Path(p) for p in selection}
+    protected = tuple(protected_folders)
+    index = {f.path: g for g in groups for f in g.files}
+    by_key = {_key(g): g for g in groups}
+
+    reasons: list[str] = []
+    _check_known_paths(selected, index, reasons)
+    _check_protected(selected, protected, reasons)
+    selected_by_group: dict[str, set[Path]] = {}
+    for p in selected:
+        if p in index:
+            selected_by_group.setdefault(_key(index[p]), set()).add(p)
+    _check_last_copy(selected_by_group, by_key, reasons)
+    if reasons:
+        raise PlanRefused(reasons)
+
+    items: list[PlannedItem] = []
+    for key, paths_ in sorted(selected_by_group.items()):
+        g = by_key[key]
+        keepers = tuple(f for f in g.files if f.path not in paths_)
+        target = _best_keeper(g, keepers)
+        for f in sorted((f for f in g.files if f.path in paths_), key=lambda f: str(f.path)):
+            items.append(PlannedItem(f, g.hash, keepers, target))
+    reason = _check_hardlink_feasible(items) if items else "nothing selected"
+    plan = ActionPlan(mode, tuple(items), hardlink_possible=not reason, hardlink_reason=reason)
+    if mode is DeleteMode.HARDLINK and not plan.hardlink_possible:
+        raise PlanRefused([f"hard links are not possible: {reason}"])
+    return plan
+
+
+def _key(g: DuplicateGroup) -> str:
+    return g.hash or "|".join(sorted(str(f.path) for f in g.files))
+
+
+def _best_keeper(g: DuplicateGroup, keepers: tuple[FileEntry, ...]) -> FileEntry | None:
+    keep_paths = {r.path for r in g.recommendations if r.verdict is Verdict.KEEP}
+    for f in keepers:
+        if f.path in keep_paths:
+            return f
+    return keepers[0] if keepers else None
+
+
+# -- execution guards -----------------------------------------------------------------------
+
+
+def _verify_unchanged(entry: FileEntry) -> str | None:
+    """None if the file is still exactly what the scan saw, else a reason."""
+    try:
+        st = os.lstat(entry.path)
+    except FileNotFoundError:
+        return "no longer exists"
+    except OSError as e:
+        return e.strerror or "cannot stat"
+    if not stat.S_ISREG(st.st_mode):
+        return "no longer a regular file"
+    if (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev) != (
+        entry.size,
+        entry.mtime_ns,
+        entry.inode,
+        entry.device,
+    ):
+        return "size, modification time or identity differs from the scan"
+    return None
+
+
+def _verify_keeper(keepers: tuple[FileEntry, ...]) -> FileEntry | None:
+    """A kept copy that still exists unchanged (the proof the content survives), or None."""
+    for k in keepers:
+        if _verify_unchanged(k) is None:
+            return k
+    return None
+
+
+# -- log ------------------------------------------------------------------------------------
+
+
+class ActionLog:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._fh: IO[str] | None = None
+
+    def open(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._fh = open(self.path, "a", encoding="utf-8")  # noqa: SIM115
+        except OSError as e:
+            raise ActionError(f"cannot open the action log {self.path}: {e.strerror}") from e
+
+    def write(self, record: dict[str, object]) -> None:
+        assert self._fh is not None
+        record = {"ts": datetime.now(UTC).isoformat(timespec="seconds"), **record}
+        self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._fh.flush()
+
+    def close(self) -> None:
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None
+
+
+# -- execution ------------------------------------------------------------------------------
+
+
+def execute(
+    plan: ActionPlan,
+    dry_run: bool = False,
+    progress: ProgressCallback | None = None,
+    cancel: CancelToken | None = None,
+    log_path: Path | None = None,
+    trash: TrashFn | None = None,
+) -> ActionSummary:
+    cancel = cancel or CancelToken()
+    trash_fn: TrashFn = trash or send2trash.send2trash
+    log = ActionLog(log_path or paths.action_log_file())
+    if not dry_run:
+        log.open()  # before the first mutation: no log, no deletion
+    results: list[ActionResult] = []
+    warnings: list[str] = []
+    total = len(plan.items)
+    try:
+        for n, item in enumerate(plan.items):
+            if progress is not None:
+                progress(Progress(Stage.ACTION, n, total, str(item.entry.path)))
+            if cancel.cancelled:  # checked between files, after the callback had its say
+                results.extend(
+                    ActionResult(i.entry.path, i.entry.size, Status.NOT_RUN) for i in plan.items[n:]
+                )
+                break
+            result = _execute_one(plan.mode, item, dry_run, trash_fn)
+            results.append(result)
+            if not dry_run:
+                try:
+                    log.write(_log_record(plan.mode, item, result))
+                except OSError as e:
+                    warnings.append(f"could not write the action log: {e.strerror}")
+        if progress is not None:
+            progress(Progress(Stage.ACTION, len(results), total, ""))
+    finally:
+        log.close()
+    return ActionSummary(plan.mode, dry_run, tuple(results), tuple(warnings))
+
+
+def _execute_one(
+    mode: DeleteMode, item: PlannedItem, dry_run: bool, trash: TrashFn
+) -> ActionResult:
+    entry = item.entry
+    problem = _verify_unchanged(entry)
+    if problem:
+        return ActionResult(entry.path, entry.size, Status.CHANGED, problem)
+    keeper = _verify_keeper(
+        (item.link_target,) if mode is DeleteMode.HARDLINK and item.link_target else item.keepers
+    )
+    if keeper is None:
+        return ActionResult(entry.path, entry.size, Status.KEEPER_CHANGED)
+    if mode is DeleteMode.HARDLINK:
+        if keeper.device != entry.device:
+            return ActionResult(entry.path, entry.size, Status.FAILED, "different filesystem")
+        if keeper.inode == entry.inode:
+            return ActionResult(entry.path, entry.size, Status.ALREADY_LINKED)
+    if dry_run:
+        return ActionResult(entry.path, entry.size, Status.DRY_RUN)
+    try:
+        if mode is DeleteMode.TRASH:
+            trash(str(entry.path))  # on failure: reported, never retried as a permanent delete
+        elif mode is DeleteMode.PERMANENT:
+            os.unlink(entry.path)
+        else:
+            _replace_with_hardlink(keeper.path, entry.path)
+    except (OSError, send2trash.TrashPermissionError) as e:
+        return ActionResult(entry.path, entry.size, Status.FAILED, _describe(e))
+    return ActionResult(entry.path, entry.size, Status.DONE, f"kept {keeper.path}")
+
+
+def _replace_with_hardlink(keep: Path, dup: Path) -> None:
+    """Link to a temp name beside the duplicate, then atomically rename over it. A failure at
+    any point leaves the duplicate in place and removes the temp link."""
+    tmp = dup.with_name(f".{dup.name}.dedupe-{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        os.link(keep, tmp)
+        os.replace(tmp, dup)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)  # only still present if the replace did not happen
+
+
+def _describe(e: Exception) -> str:
+    return getattr(e, "strerror", None) or str(e) or type(e).__name__
+
+
+def _log_record(mode: DeleteMode, item: PlannedItem, result: ActionResult) -> dict[str, object]:
+    record: dict[str, object] = {
+        "action": mode.value,
+        "path": str(item.entry.path),
+        "size": item.entry.size,
+        "hash": item.group_hash,
+        "status": result.status.value,
+    }
+    if result.detail:
+        record["detail"] = result.detail
+    if mode is DeleteMode.HARDLINK and item.link_target is not None:
+        record["linked_to"] = str(item.link_target.path)
+    return record

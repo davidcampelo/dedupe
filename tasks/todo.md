@@ -157,14 +157,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** S
 
-### Task 9: Actions, part 1 (plan, guards, dry run, trash, log)
+### Task 9: Actions, part 1 (plan, guards, dry run, trash, log) ✅
 
 **Description:** `core/actions.py`: `plan_actions(groups, selection, mode)` refuses any selection that would remove the last copy of a group or touch a protected path. `execute(plan, dry_run, progress, cancel)` re-verifies each file (exists, same size/mtime_ns/inode) immediately before acting and skips changed files. It moves files to Trash with send2trash, appends JSON lines to `$XDG_DATA_HOME/dedupe/actions.log`, reports progress per file and can be cancelled between files.
 
 **Acceptance criteria:**
-- [ ] Selecting every copy of a group is refused before any mutation happens
-- [ ] A file modified after the scan is skipped as "changed since scan"
-- [ ] A dry run leaves the tree byte-identical but produces the same plan and summary; a Trash failure is reported, not retried as a permanent delete
+- [x] Selecting every copy of a group is refused before any mutation happens
+- [x] A file modified after the scan is skipped as "changed since scan"
+- [x] A dry run leaves the tree byte-identical but produces the same plan and summary; a Trash failure is reported, not retried as a permanent delete
 
 **Verification:** plus a mutation check: disabling each guard in turn makes at least one test fail
 
@@ -174,14 +174,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 10: Actions, part 2 (permanent delete and hardlink replacement)
+### Task 10: Actions, part 2 (permanent delete and hardlink replacement) ✅
 
 **Description:** Adds the `PERMANENT` mode (`os.unlink`) and the `HARDLINK` mode (same-device check, `os.link(keep, tmp)` in the duplicate's directory, then `os.replace(tmp, dup)`, with tmp cleaned up on failure). `plan_actions` reports whether hardlinking is possible.
 
 **Acceptance criteria:**
-- [ ] After hardlinking, every path exists with the same content and they share one inode
-- [ ] A cross-device selection makes hardlink unavailable; a failure midway leaves no tmp files and no missing paths
-- [ ] Permanent delete removes only the planned files and logs each one
+- [x] After hardlinking, every path exists with the same content and they share one inode
+- [x] A cross-device selection makes hardlink unavailable; a failure midway leaves no tmp files and no missing paths
+- [x] Permanent delete removes only the planned files and logs each one
 
 **Dependencies:** T9
 

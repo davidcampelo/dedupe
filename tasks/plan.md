@@ -111,8 +111,8 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 - [x] T6: Recommender + bulk-rule helpers
 - [x] T7: Hidden/temp detector + `dedupe hidden` CLI
 - [x] T8: Settings (TOML, XDG paths, validation)
-- [ ] T9: Actions, part 1: plan, guards, dry run, trash, log, progress/cancel
-- [ ] T10: Actions, part 2: permanent delete + hardlink replacement
+- [x] T9: Actions, part 1: plan, guards, dry run, trash, log, progress/cancel
+- [x] T10: Actions, part 2: permanent delete + hardlink replacement
 
 **Checkpoint B:** the core is feature-complete and mypy-strict clean; every safety guard is mutation-checked; a 100k-file benchmark has been recorded.
 
