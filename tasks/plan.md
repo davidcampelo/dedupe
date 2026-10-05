@@ -171,6 +171,17 @@ Things the watchdog found that shaped the design (all fixed, all covered by the 
 - **Heavy GUI-thread work moved to workers:** result totals, the post-delete group list and the summary counters are computed in the job, not in the slot.
 - Coverage tracing slows Python 2 to 3x, so the full gate (which runs under `--cov`) is the strictest place these tests run; they pass there.
 
+**Similar images** (`python scripts/bench_similar.py`, generated JPEGs of which a quarter have a resized, re-compressed near-copy; 6-core devcontainer, 4 hash workers; "longest stall" is a 10 ms heartbeat thread running beside the scan, the GIL pressure a GUI would feel; the limit is 100 ms):
+
+| Images | First scan | Rescan (cached) | Longest stall | Similar groups |
+|---|---|---|---|---|
+| 10,000 | 34.5 s | 2.1 s | 19 ms | 2,500 |
+| 50,000 | 194 s | 31.2 s | 66 ms (55 ms without the similar pass) | 12,500 |
+
+- **Candidate search** (`--synthetic 50000`, random hashes, bound 12, every pair against 8 variants): 29.9 s for 1.25 billion pairs. It is a small part of the first scan, so a BK-tree or multi-index hashing is not worth adding yet.
+- **ThreadPool or ProcessPool: ThreadPool stays.** Pillow releases the GIL while decoding and the 32x32 DCT is tiny; the stall is within the limit and the same as the baseline scan's.
+- A rescan of 50k images still takes 31 s although nothing is decoded; the candidate search above accounts for about 30 s of it. The verify step was not timed on its own.
+
 ## Acceptance pass (spec section 10)
 
 Run on 2026-10-05 in the devcontainer (no display, no remote, `/files` is a dangling symlink).

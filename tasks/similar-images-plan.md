@@ -219,10 +219,10 @@ The similar chain inside `run_scan`; `SimilarGroup` and `SimilarMember`; the qua
 
 **Scope:** S
 
-### Checkpoint S-A: Engine complete
-- [ ] Full `check.sh` passes
-- [ ] Bench on 10k and 50k generated images: first-scan time, rescan time (cache), candidate and verify time; results recorded in [plan.md](plan.md) under "Recorded measurements"
-- [ ] Decide ThreadPool vs ProcessPool from the GUI-stall numbers
+### Checkpoint S-A: Engine complete ✅ (ThreadPool stays; the human review is still open)
+- [x] Full `check.sh` passes
+- [x] Bench on 10k and 50k generated images: first-scan time, rescan time (cache), candidate and verify time; results recorded in [plan.md](plan.md) under "Recorded measurements"
+- [x] Decide ThreadPool vs ProcessPool from the GUI-stall numbers
 
 ### Phase S2: GUI
 
