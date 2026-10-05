@@ -28,14 +28,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 ## Phase 1: Headless engine slice
 
-### Task 1: Project scaffold, models, tooling, test safety nets
+### Task 1: Project scaffold, models, tooling, test safety nets ✅
 
 **Description:** Create `pyproject.toml` (hatchling, `requires-python = ">=3.12"`). Runtime deps: PySide6, blake3, xxhash, Pillow, send2trash, tomli-w; extras: `heif` (pillow-heif) and `dev` (pytest, pytest-qt, pytest-cov, ruff, mypy). Add the `dedupe`/`dedupe-gui` entry points. Tool config: ruff `target-version = "py312"`; mypy with `files = ["dedupe"]`, strict on `dedupe.core`, typed defs required in `dedupe.gui`; pytest with `--strict-markers` and a registered `slow` marker. Add the package skeleton from spec §3 and `core/models.py` (frozen dataclasses `FileEntry`, `DuplicateGroup`, `Recommendation`, `ScanOptions`, `SkippedEntry`, `ScanResult`, `Progress`, plus `CancelToken`). Add two safety-net tests: the **isolation fixture** (autouse; `HOME` and `XDG_*` point at `tmp_path`) and the **deletion audit** (`ast` scan; deletion calls are allowed only in `core/actions.py` plus an allowlist with reasons).
 
 **Acceptance criteria:**
-- [ ] `pip install -e ".[dev]"` works; `dedupe --help` runs; `dedupe-gui` opens an empty window
-- [ ] `ScanOptions` defaults match spec §4; `scripts/check.sh` (full) passes on the skeleton
-- [ ] The deletion-audit test fails when a stray `os.remove` is added to any other module (checked by hand once)
+- [x] `pip install -e ".[dev]"` works; `dedupe --help` runs; `dedupe-gui` opens an empty window
+- [x] `ScanOptions` defaults match spec §4; `scripts/check.sh` (full) passes on the skeleton
+- [x] The deletion-audit test fails when a stray `os.remove` is added to any other module (checked by hand once)
 
 **Dependencies:** T0
 
