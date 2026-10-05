@@ -15,7 +15,7 @@ ICON_NAMES = (
     "scan-folder", "choose-folder", "duplicates", "hidden-files", "temp-tilde",
     "compare-images", "keep", "move-to-trash", "delete-forever", "hard-link",
     "protected-folder", "dry-run", "verify-hash", "space-freed", "cancel-scan",
-    "settings", "action-log", "skipped-error",
+    "settings", "action-log", "skipped-error", "similar-images",
 )  # fmt: skip
 BADGE_NAMES = (
     "badge-keep", "badge-delete", "badge-protected", "badge-hardlinked", "badge-changed",

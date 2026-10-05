@@ -95,6 +95,7 @@ Index = QModelIndex | QPersistentModelIndex
 
 
 class FileNode:
+    is_group = False
     __slots__ = ("entry", "group", "index", "override", "protected", "reason", "recommended")
 
     def __init__(self, entry: FileEntry, group: GroupNode, index: int) -> None:
@@ -119,6 +120,7 @@ class FileNode:
 
 
 class GroupNode:
+    is_group = True
     __slots__ = ("expanded", "files", "group", "index", "row")
 
     def __init__(self, group: DuplicateGroup) -> None:
@@ -576,8 +578,8 @@ class TreeDelegate(QStyledItemDelegate):
         return opt
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: Index) -> None:
-        node = DuplicatesModel.node_at(index)
-        if index.column() == COL_ITEM and isinstance(node, GroupNode):
+        node = index.data(NODE_ROLE)  # works for any model whose group nodes have ``is_group``
+        if index.column() == COL_ITEM and getattr(node, "is_group", False):
             opt = QStyleOptionViewItem(option)
             opt.rect = opt.rect.adjusted(INDENT, 0, 0, 0)
             opt.font.setBold(True)

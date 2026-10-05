@@ -52,8 +52,8 @@ def test_every_icon_loads_and_is_legible_on_light_and_dark(qtbot: QtBot, name: s
         assert contrast(ink(ic), bg) >= 2.5, f"{name} is hard to see on {bg.name()}"
 
 
-def test_counts_match_the_mockup() -> None:
-    assert len(icons.ICON_NAMES) == 18 and len(icons.BADGE_NAMES) == 5
+def test_counts_match_the_mockup_plus_the_similar_images_icon() -> None:
+    assert len(icons.ICON_NAMES) == 19 and len(icons.BADGE_NAMES) == 5
 
 
 def test_monochrome_icons_follow_the_palette_and_fixed_ones_do_not(qtbot: QtBot) -> None:

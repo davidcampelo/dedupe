@@ -2,7 +2,9 @@
 
 Each copy gets a card: a thumbnail (a placeholder appears at once and is swapped for the image
 when its job finishes), resolution, file size, modified date, EXIF date and a Keep/Delete toggle
-that is bound to the duplicates model, so the panel and the list always agree."""
+that is bound to the duplicates (or similar images) model, so the panel and the list always
+agree. For a group of *similar* images a card also shows the match percentage and how many exact
+copies the image stands for."""
 
 from __future__ import annotations
 
@@ -23,13 +25,14 @@ from PySide6.QtWidgets import (
 )
 
 from dedupe.core.formatting import human
-from dedupe.core.models import DuplicateGroup, FileEntry
+from dedupe.core.models import DuplicateGroup, FileEntry, SimilarGroup, SimilarMember
 from dedupe.gui.file_types import is_image
 from dedupe.gui.preview_window import PreviewWindow
 from dedupe.gui.thumbnails import THUMB_SIZE, ThumbnailService, ThumbResult, cache_key
 
 if TYPE_CHECKING:
     from dedupe.gui.duplicates_view import DuplicatesModel
+    from dedupe.gui.similar_view import SimilarModel
 
 MAX_CARDS = 12
 
@@ -43,9 +46,17 @@ class ClickableLabel(QLabel):
 
 
 class ImageCard(QFrame):
-    def __init__(self, entry: FileEntry, content_hash: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        entry: FileEntry,
+        content_hash: str,
+        parent: QWidget | None = None,
+        member: SimilarMember | None = None,
+        reference: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.entry = entry
+        self.member = member
         self.content_hash = content_hash
         self.key = cache_key(entry.path, THUMB_SIZE, entry.mtime_ns)
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -61,17 +72,30 @@ class ImageCard(QFrame):
             "Modified: " + datetime.fromtimestamp(entry.mtime_ns / 1e9).strftime("%Y-%m-%d %H:%M")
         )
         self.exif = QLabel("EXIF date: …")
-        self.delete_box = QCheckBox("Delete this copy")
+        self.delete_box = QCheckBox("Delete this image" if member else "Delete this copy")
+        self.match = QLabel("")
+        self.exact = QLabel("")
         layout = QVBoxLayout(self)
-        for w in (
+        widgets: list[QWidget] = [
             self.thumb,
             self.name,
             self.resolution,
             self.size_label,
             self.modified,
-            self.exif,
-            self.delete_box,
-        ):
+        ]
+        if member is not None:
+            self.resolution.setText(f"Resolution: {member.width} × {member.height}")
+            self.match.setText(
+                "Reference image" if reference else f"{member.similarity:.0%} similar"
+            )
+            widgets.append(self.match)
+            if member.aliases:
+                n = len(member.aliases)
+                self.exact.setText(f"+{n} exact cop{'y' if n == 1 else 'ies'}")
+                self.exact.setToolTip("\n".join(str(a) for a in member.aliases))
+                widgets.append(self.exact)
+        widgets += [self.exif, self.delete_box]
+        for w in widgets:
             layout.addWidget(w)
 
     def apply(self, result: ThumbResult) -> None:
@@ -93,9 +117,9 @@ class ImageComparePanel(QWidget):
     def __init__(self, service: ThumbnailService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
-        self.model: DuplicatesModel | None = None  # set by bind()
+        self.model: DuplicatesModel | SimilarModel | None = None  # set by bind()
         self.cards: list[ImageCard] = []
-        self.group: DuplicateGroup | None = None
+        self.group: DuplicateGroup | SimilarGroup | None = None
         self._syncing = False
         self._previews: list[PreviewWindow] = []
         self.heading = QLabel("")
@@ -116,12 +140,12 @@ class ImageComparePanel(QWidget):
         service.ready.connect(self._on_ready)
         self.hide()
 
-    def bind(self, model: DuplicatesModel) -> None:
-        """Keep the toggles in sync with a DuplicatesModel."""
+    def bind(self, model: DuplicatesModel | SimilarModel) -> None:
+        """Keep the toggles in sync with a DuplicatesModel or SimilarModel."""
         self.model = model
         model.selection_changed.connect(self.refresh_toggles)
 
-    def show_group(self, group: DuplicateGroup | None) -> None:
+    def show_group(self, group: DuplicateGroup | SimilarGroup | None) -> None:
         if group is not None and group is self.group:
             return
         self.group = group
@@ -129,35 +153,46 @@ class ImageComparePanel(QWidget):
             card.setParent(None)
             card.deleteLater()
         self.cards = []
-        if group is None or not any(is_image(f.path) for f in group.files):
+        if isinstance(group, SimilarGroup):
+            entries = [m.entry for m in group.members]
+            key, noun = group.id, "similar images"
+        elif group is not None:
+            entries = list(group.files)
+            key, noun = group.hash, "identical images"
+        else:
+            entries, key, noun = [], "", ""
+        if not any(is_image(e.path) for e in entries):
             self.service.cancel_pending(set())
             self.hide()
             return
-        files = group.files[:MAX_CARDS]
-        wanted = {cache_key(f.path, THUMB_SIZE, f.mtime_ns) for f in files}
+        shown = entries[:MAX_CARDS]
+        wanted = {cache_key(e.path, THUMB_SIZE, e.mtime_ns) for e in shown}
         self.service.cancel_pending(wanted)  # drop thumbnails for groups no longer shown
-        self.heading.setText(f"Compare {len(group.files)} identical images")
+        self.heading.setText(f"Compare {len(entries)} {noun}")
         self.more.setText(
-            f"… and {len(group.files) - MAX_CARDS} more copies"
-            if len(group.files) > MAX_CARDS
+            f"… and {len(entries) - MAX_CARDS} more "
+            + ("images" if isinstance(group, SimilarGroup) else "copies")
+            if len(entries) > MAX_CARDS
             else ""
         )
-        for f in files:
-            card = ImageCard(f, group.hash)
-            card.thumb.double_clicked.connect(lambda f=f: self.open_preview(f))
-            card.delete_box.toggled.connect(lambda checked, p=f.path: self._on_toggled(p, checked))
+        # Similar members have no content hash: their thumbnails skip the by-hash disk cache.
+        content_hash = "" if isinstance(group, SimilarGroup) else key
+        for n, e in enumerate(shown):
+            member = group.members[n] if isinstance(group, SimilarGroup) else None
+            card = ImageCard(e, content_hash, member=member, reference=n == 0)
+            card.thumb.double_clicked.connect(lambda e=e: self.open_preview(e))
+            card.delete_box.toggled.connect(lambda checked, p=e.path: self._on_toggled(p, checked))
             self._row.addWidget(card)
             self.cards.append(card)
-            hit = self.service.request(f.path, THUMB_SIZE, f.mtime_ns, group.hash)
+            hit = self.service.request(e.path, THUMB_SIZE, e.mtime_ns, content_hash)
             if hit is not None:
                 card.apply(hit)
         self.refresh_toggles()
         self.show()
 
     def open_preview(self, entry: FileEntry) -> PreviewWindow:
-        window = PreviewWindow(
-            self.service, entry.path, entry.mtime_ns, self.group.hash if self.group else "", self
-        )
+        content_hash = self.group.hash if isinstance(self.group, DuplicateGroup) else ""
+        window = PreviewWindow(self.service, entry.path, entry.mtime_ns, content_hash, self)
         window.show()
         self._previews.append(window)
         return window
@@ -174,7 +209,7 @@ class ImageComparePanel(QWidget):
                 card.delete_box.setText(
                     "Protected (kept)"
                     if node is not None and node.protected
-                    else "Delete this copy"
+                    else ("Delete this image" if card.member else "Delete this copy")
                 )
         finally:
             self._syncing = False

@@ -19,6 +19,7 @@ from dedupe.core.actions import (
     execute,
     plan_actions,
     plan_hidden_actions,
+    plan_similar_actions,
 )
 from dedupe.core.cache import HashCache
 from dedupe.core.hidden import HiddenItem, HiddenResult, scan_hidden
@@ -29,6 +30,7 @@ from dedupe.core.models import (
     Progress,
     ProgressCallback,
     ScanOptions,
+    SimilarGroup,
 )
 from dedupe.core.pipeline import run_scan
 from dedupe.gui.gcutil import freeze, gc_paused
@@ -151,6 +153,55 @@ class ActionJob(Job):
                 return ActionOutcome(None, tuple(e.reasons))
             summary = execute(plan, dry_run, progress, cancel, log_path, trash)
             return ActionOutcome(summary)
+
+        super().__init__(work)
+
+
+class SimilarPlanJob(Job):
+    """Plans the removal of similar images off the GUI thread (hard links are never offered)."""
+
+    def __init__(
+        self,
+        groups: list[SimilarGroup],
+        selection: Iterable[Path],
+        protected_folders: Iterable[str] = (),
+    ) -> None:
+        selection = set(selection)
+        protected = tuple(protected_folders)
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> PlanOutcome:
+            try:
+                return PlanOutcome(
+                    plan_similar_actions(groups, selection, DeleteMode.TRASH, protected)
+                )
+            except PlanRefused as e:
+                return PlanOutcome(None, tuple(e.reasons))
+
+        super().__init__(work)
+
+
+class SimilarActionJob(Job):
+    """Plans (again, for the chosen mode) and executes the removal of similar images."""
+
+    def __init__(
+        self,
+        groups: list[SimilarGroup],
+        selection: Iterable[Path],
+        mode: DeleteMode,
+        dry_run: bool,
+        protected_folders: Iterable[str] = (),
+        trash: TrashFn | None = None,
+        log_path: Path | None = None,
+    ) -> None:
+        selection = set(selection)
+        protected = tuple(protected_folders)
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> ActionOutcome:
+            try:
+                plan = plan_similar_actions(groups, selection, mode, protected)
+            except PlanRefused as e:
+                return ActionOutcome(None, tuple(e.reasons))
+            return ActionOutcome(execute(plan, dry_run, progress, cancel, log_path, trash))
 
         super().__init__(work)
 

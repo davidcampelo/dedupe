@@ -36,13 +36,22 @@ from PySide6.QtWidgets import (
 from dedupe.core.actions import ActionPlan, TrashFn
 from dedupe.core.formatting import human
 from dedupe.core.hidden import HiddenItem, HiddenResult
-from dedupe.core.models import DeleteMode, DuplicateGroup, Progress, ScanResult, Stage
+from dedupe.core.models import (
+    DeleteMode,
+    DuplicateGroup,
+    Progress,
+    ScanResult,
+    SimilarGroup,
+    Stage,
+)
+from dedupe.core.perceptual import similar_available
 from dedupe.core.settings import Settings, save_settings
 from dedupe.gui import icons
 from dedupe.gui.delete_dialog import DeleteChoice, DeleteDialog, format_summary
 from dedupe.gui.duplicates_view import DuplicatesTab
 from dedupe.gui.hidden_files_view import HiddenFilesTab
 from dedupe.gui.settings_dialog import SettingsDialog
+from dedupe.gui.similar_view import SimilarImagesTab
 from dedupe.gui.skipped_view import SkippedTab
 from dedupe.gui.workers import (
     ActionJob,
@@ -55,6 +64,8 @@ from dedupe.gui.workers import (
     PlanJob,
     PlanOutcome,
     ScanJob,
+    SimilarActionJob,
+    SimilarPlanJob,
 )
 
 MAX_RECENT = 10
@@ -74,11 +85,12 @@ def _as_list(value: object) -> list[str]:
 class DeleteRequest:
     """What a deletion was asked for, kept while the plan is checked and the user confirms."""
 
-    kind: str  # "duplicates" or "hidden"
+    kind: str  # "duplicates", "similar" or "hidden"
     groups: list[DuplicateGroup] = field(default_factory=list)
     selection: set[Path] = field(default_factory=set)
     hidden_items: list[HiddenItem] = field(default_factory=list)
     allow_protected: tuple[Path, ...] = ()
+    similar_groups: list[SimilarGroup] = field(default_factory=list)
 
 
 class MainWindow(QMainWindow):
@@ -102,6 +114,7 @@ class MainWindow(QMainWindow):
         self.result: ScanResult | None = None
         self.folder: Path | None = None
         self.recent: list[str] = []
+        self._scan_searched_similar = False  # did the running scan include the similar search?
 
         self.setWindowTitle("Dedupe")
         self.setWindowIcon(icons.app_icon())
@@ -138,9 +151,11 @@ class MainWindow(QMainWindow):
         self.duplicates_tab = DuplicatesTab(self.runner)
         self.hidden_tab = HiddenFilesTab()
         self.skipped_tab = SkippedTab()
+        self.similar_tab = SimilarImagesTab(self.runner)
         self.tabs.addTab(self.duplicates_tab, icons.icon("duplicates"), "Duplicates")
         self.tabs.addTab(self.hidden_tab, icons.icon("hidden-files"), "Hidden && Temp Files")
         self.tabs.addTab(self.skipped_tab, icons.icon("skipped-error"), "Skipped / Errors")
+        self.tabs.addTab(self.similar_tab, icons.icon("similar-images"), "Similar Images")
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -153,13 +168,24 @@ class MainWindow(QMainWindow):
 
         self.files_label = QLabel("Files scanned: 0")
         self.groups_label = QLabel("Duplicate groups: 0")
+        self.similar_label = QLabel("Similar groups: 0")
         self.wasted_label = QLabel("Wasted space: 0 B")
         self.selected_label = QLabel("Selected for deletion: 0 B")
-        for label in (self.files_label, self.groups_label, self.wasted_label, self.selected_label):
+        for label in (
+            self.files_label,
+            self.groups_label,
+            self.similar_label,
+            self.wasted_label,
+            self.selected_label,
+        ):
             self.statusBar().addPermanentWidget(label)
 
         self.duplicates_tab.model.selection_changed.connect(self._update_selected_label)
         self.duplicates_tab.source_changed.connect(self._update_totals)
+        self.similar_tab.model.selection_changed.connect(self._update_selected_label)
+        self.similar_tab.source_changed.connect(self._update_totals)
+        self.similar_tab.folder_protected.connect(self._on_folder_protected)
+        self.similar_tab.delete_requested.connect(self.request_similar_delete)
         self.duplicates_tab.folder_protected.connect(self._on_folder_protected)
         self.hidden_tab.delete_requested.connect(self.request_hidden_delete)
         self._install_shortcuts()
@@ -216,9 +242,9 @@ class MainWindow(QMainWindow):
         if self.folder is None or self.busy:
             return
         self.error_label.hide()
-        self._begin(
-            ScanJob(self.folder, self.settings.to_scan_options()), "Starting…", self._on_finished
-        )
+        options = self.settings.to_scan_options()
+        self._scan_searched_similar = options.similar_images and similar_available()
+        self._begin(ScanJob(self.folder, options), "Starting…", self._on_finished)
 
     def _begin(self, job: Job, text: str, on_finished: Callable[[Any], None]) -> None:
         job.signals.progress.connect(self._on_progress)
@@ -239,6 +265,15 @@ class MainWindow(QMainWindow):
         groups, selection = model.groups(), model.selected_paths()
         self._delete_request = DeleteRequest("duplicates", groups, selection)
         job = PlanJob(groups, selection, self.settings.protected_folders)
+        self._begin(job, "Checking the selection…", self._on_plan_finished)
+
+    def request_similar_delete(self) -> None:
+        model = self.similar_tab.model
+        if self.busy or model.loading or model.selected_count == 0:
+            return
+        groups, selection = model.groups(), model.selected_paths()
+        self._delete_request = DeleteRequest("similar", similar_groups=groups, selection=selection)
+        job = SimilarPlanJob(groups, selection, self.settings.protected_folders)
         self._begin(job, "Checking the selection…", self._on_plan_finished)
 
     def request_hidden_delete(self) -> None:
@@ -272,6 +307,16 @@ class MainWindow(QMainWindow):
                 self.trash_backend,
                 self.log_path,
             )
+        elif request.kind == "similar":
+            job = SimilarActionJob(
+                request.similar_groups,
+                request.selection,
+                choice.mode,
+                choice.dry_run,
+                self.settings.protected_folders,
+                self.trash_backend,
+                self.log_path,
+            )
         else:
             job = ActionJob(
                 request.groups,
@@ -295,8 +340,9 @@ class MainWindow(QMainWindow):
         if not summary.dry_run:
             if self._active_kind == "hidden":
                 self.hidden_tab.model.remove_paths(summary.gone)
-            else:
+            else:  # a file gone from one tab is gone from the other too
                 self.duplicates_tab.remove_paths(summary.gone)
+                self.similar_tab.remove_paths(summary.gone)
         self.show_summary(format_summary(summary))
         self.action_finished.emit(summary)
 
@@ -323,6 +369,14 @@ class MainWindow(QMainWindow):
     def _on_progress(self, p: Progress) -> None:
         if p.stage is Stage.ACTION:
             self.stage_label.setText(f"Working: {p.done} / {p.total} files  {p.current_path}")
+            self.progress_bar.setRange(0, 1000)
+            self.progress_bar.setValue(int(1000 * p.done / p.total) if p.total else 0)
+            return
+        if p.stage is Stage.SIMILAR:
+            text = f"{p.stage.value}: {p.done} / {p.total} images" if p.total else p.stage.value
+            if p.current_path:
+                text += f"  {p.current_path}"
+            self.stage_label.setText(text)
             self.progress_bar.setRange(0, 1000)
             self.progress_bar.setValue(int(1000 * p.done / p.total) if p.total else 0)
             return
@@ -357,13 +411,25 @@ class MainWindow(QMainWindow):
             return
         self.result = result
         self.progress_bar.setValue(1000)
+        similar = (
+            f", {len(result.similar_groups)} similar image groups"
+            if (self._scan_searched_similar)
+            else ""
+        )
         self.stage_label.setText(
-            f"Done: {len(result.groups)} duplicate groups in {result.files_scanned} files"
+            f"Done: {len(result.groups)} duplicate groups{similar} in {result.files_scanned} files"
         )
         self.files_label.setText(f"Files scanned: {result.files_scanned}")
         self.groups_label.setText(f"Duplicate groups: {len(result.groups)}")
+        self.similar_label.setText(f"Similar groups: {len(result.similar_groups)}")
         self.wasted_label.setText(f"Wasted space: {human(result.reclaimable)}")
         self.duplicates_tab.set_groups(result.groups, self.settings.protected_folders, result.root)
+        self.similar_tab.set_groups(
+            result.similar_groups,
+            self.settings.protected_folders,
+            result.root,
+            self._scan_searched_similar,
+        )
         self.skipped_tab.set_entries(result.skipped)
         self.hidden_tab.set_items(())
         if result.files_scanned == 0 and result.skipped:  # the folder itself was unusable
@@ -405,6 +471,7 @@ class MainWindow(QMainWindow):
     def _update_totals(self) -> None:
         tab = self.duplicates_tab
         self.groups_label.setText(f"Duplicate groups: {tab.source_group_count}")
+        self.similar_label.setText(f"Similar groups: {self.similar_tab.source_group_count}")
         self.wasted_label.setText(f"Wasted space: {human(tab.source_reclaimable)}")
 
     def _on_folder_protected(self, folder: Path) -> None:
@@ -414,10 +481,11 @@ class MainWindow(QMainWindow):
         path = self.settings_path
         self.runner.start(Job(lambda cancel, progress: save_settings(settings, path)))
         self.duplicates_tab.set_protected(settings.protected_folders)
+        self.similar_tab.set_protected(settings.protected_folders)
         self.statusBar().showMessage(f"{folder} is now protected", 5000)
 
     def _update_selected_label(self) -> None:
-        size = self.duplicates_tab.model.selected_size
+        size = self.duplicates_tab.model.selected_size + self.similar_tab.model.selected_size
         self.selected_label.setText(f"Selected for deletion: {human(size)}")
 
     def _show_error(self, message: str) -> None:
@@ -431,6 +499,7 @@ class MainWindow(QMainWindow):
         self.recent_combo.setEnabled(not busy)
         self.cancel_button.setEnabled(busy)
         self.duplicates_tab.set_busy(busy)
+        self.similar_tab.set_busy(busy)
         self.hidden_tab.set_busy(busy)
 
     # -- settings -------------------------------------------------------------------------
@@ -456,6 +525,7 @@ class MainWindow(QMainWindow):
         self.runner.start(job)
         if new.protected_folders != old.protected_folders:
             self.duplicates_tab.set_protected(new.protected_folders)
+            self.similar_tab.set_protected(new.protected_folders)
         self.statusBar().showMessage("Settings saved; they apply to the next scan", 5000)
 
     # -- shortcuts, persisted state, theme -------------------------------------------------
@@ -472,7 +542,7 @@ class MainWindow(QMainWindow):
         add("F5", self.start_scan, "Scan")
         add("Escape", self.cancel_scan, "Cancel")
         add("Ctrl+,", self.open_settings, "Settings")
-        for n in range(3):
+        for n in range(4):
             add(f"Ctrl+{n + 1}", partial(self.tabs.setCurrentIndex, n), f"Tab {n + 1}")
         self.setTabOrder(self.choose_button, self.recent_combo)
         self.setTabOrder(self.recent_combo, self.scan_button)
@@ -520,9 +590,10 @@ class MainWindow(QMainWindow):
             (self.settings_button, "settings"),
         ):
             button.setIcon(icons.icon(name))
-        for i, name in enumerate(("duplicates", "hidden-files", "skipped-error")):
+        for i, name in enumerate(("duplicates", "hidden-files", "skipped-error", "similar-images")):
             self.tabs.setTabIcon(i, icons.icon(name))
         self.duplicates_tab.refresh_icons()
+        self.similar_tab.refresh_icons()
         self.hidden_tab.refresh_icons()
 
     def event(self, event: QEvent) -> bool:
@@ -552,5 +623,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._save_ui_state()
         self.duplicates_tab.thumbnails.shutdown(1000)
+        self.similar_tab.thumbnails.shutdown(1000)
         self.runner.shutdown(2000)
         super().closeEvent(event)

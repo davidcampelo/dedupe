@@ -232,10 +232,10 @@ The similar chain inside `run_scan`; `SimilarGroup` and `SimilarMember`; the qua
 
 **Scope:** S
 
-#### Task S9: Similar Images tab
+#### Task S9: Similar Images tab ✅
 Tab, model, `ImageComparePanel` additions, icon.
-- [ ] 5k groups load with no GUI-thread gap over 100 ms (`ui_watchdog`)
-- [ ] Cards show dimensions, size, "% similar" and "+N exact copies"; the icon works in light and dark themes
+- [x] 5k groups load with no GUI-thread gap over 100 ms (`ui_watchdog`)
+- [x] Cards show dimensions, size, "% similar" and "+N exact copies"; the icon works in light and dark themes
 
 **Scope:** L
 

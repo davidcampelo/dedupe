@@ -34,6 +34,9 @@ from dedupe.core.formatting import human
 from dedupe.core.models import DeleteMode
 
 ACK_TEXT = "I understand these files cannot be recovered"
+SIMILAR_WARNING = (
+    "These are similar, not identical. The deleted images' content will not exist anywhere else."
+)
 OK_TEXT = {
     DeleteMode.TRASH: "Move to Trash",
     DeleteMode.PERMANENT: "Delete permanently",
@@ -110,10 +113,19 @@ class DeleteDialog(QDialog):
         self.setMinimumWidth(700)
 
         count = len(plan.items)
+        self.similar = any(i.similar for i in plan.items)
+        kept = (
+            "At least one image of every group is always kept."
+            if self.similar
+            else "One copy of every group is always kept."
+        )
         self.summary_label = QLabel(
             f"<b>{count} file{'s' if count != 1 else ''}</b> selected, {human(plan.total_size)} "
-            "to reclaim. One copy of every group is always kept."
+            f"to reclaim. {kept}"
         )
+        self.similar_warning = QLabel(f"<b>{SIMILAR_WARNING}</b>")
+        self.similar_warning.setWordWrap(True)
+        self.similar_warning.setVisible(self.similar)
         self.files_model = _FilesModel(plan, self)
         self.proxy = QSortFilterProxyModel(self)
         self.proxy.setSourceModel(self.files_model)
@@ -135,6 +147,7 @@ class DeleteDialog(QDialog):
         self.permanent_radio = QRadioButton("Delete permanently")
         self.hardlink_radio = QRadioButton("Replace with hard links (keeps every path working)")
         self.hardlink_radio.setEnabled(plan.hardlink_possible)
+        self.hardlink_radio.setVisible(not self.similar)  # similar images are never linked
         if not plan.hardlink_possible:
             self.hardlink_radio.setToolTip(
                 plan.hardlink_reason or "Not possible for this selection"
@@ -145,6 +158,7 @@ class DeleteDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.summary_label)
+        layout.addWidget(self.similar_warning)
         layout.addWidget(self.paths_view)
         for w in (self.trash_radio, self.permanent_radio, self.hardlink_radio, self.ack_box):
             layout.addWidget(w)
