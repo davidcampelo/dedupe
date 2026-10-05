@@ -23,6 +23,7 @@ from dedupe.core.formatting import human
 from dedupe.core.models import Progress, ScanResult, Stage
 from dedupe.core.settings import Settings
 from dedupe.gui import icons
+from dedupe.gui.duplicates_view import DuplicatesTab
 from dedupe.gui.workers import JobRunner, ScanJob
 
 MAX_RECENT = 10
@@ -72,7 +73,7 @@ class MainWindow(QMainWindow):
         self.error_label.hide()
 
         self.tabs = QTabWidget()
-        self.duplicates_tab = QWidget()
+        self.duplicates_tab = DuplicatesTab()
         self.hidden_tab = QWidget()
         self.skipped_tab = QWidget()
         self.tabs.addTab(self.duplicates_tab, icons.icon("duplicates"), "Duplicates")
@@ -95,6 +96,7 @@ class MainWindow(QMainWindow):
         for label in (self.files_label, self.groups_label, self.wasted_label, self.selected_label):
             self.statusBar().addPermanentWidget(label)
 
+        self.duplicates_tab.model.selection_changed.connect(self._update_selected_label)
         self.choose_button.clicked.connect(self.choose_folder)
         self.recent_combo.activated.connect(self._on_recent_activated)
         self.scan_button.clicked.connect(self.start_scan)
@@ -187,6 +189,7 @@ class MainWindow(QMainWindow):
             self.files_label.setText(f"Files scanned: {result.files_scanned}")
             self.groups_label.setText(f"Duplicate groups: {len(result.groups)}")
             self.wasted_label.setText(f"Wasted space: {human(result.reclaimable)}")
+            self.duplicates_tab.set_groups(result.groups, self.settings.protected_folders)
             if result.root and not result.files_scanned and result.skipped:
                 self._show_error(f"{result.skipped[0].path}: {result.skipped[0].reason}")
         self._update_buttons()
@@ -200,6 +203,10 @@ class MainWindow(QMainWindow):
         self._show_error(message)
         self._update_buttons()
         self.scan_failed.emit(message)
+
+    def _update_selected_label(self) -> None:
+        size = self.duplicates_tab.model.selected_size
+        self.selected_label.setText(f"Selected for deletion: {human(size)}")
 
     def _show_error(self, message: str) -> None:
         self.error_label.setText(message)

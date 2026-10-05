@@ -119,7 +119,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 ### Phase 3: GUI vertical slice
 - [x] T11: Icon set (SVG authoring + theme-aware loader)
 - [x] T12: Job runner, UI watchdog, GUI-thread rules test, main window shell with scan/progress/cancel
-- [ ] T13: Duplicates tree model/view (batched loading, checkboxes, badges, Space toggling)
+- [x] T13: Duplicates tree model/view (batched loading, checkboxes, badges, Space toggling)
 - [ ] T14: Delete confirmation flow (checkbox for permanent delete) executed by `ActionJob`
 
 **Checkpoint C:** scan → review → Trash → log works end to end in the GUI; the 100k-file watchdog run passes; cancel responds within 1 s.

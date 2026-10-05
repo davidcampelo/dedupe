@@ -229,14 +229,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 13: Duplicates tree
+### Task 13: Duplicates tree ✅
 
 **Description:** `gui/duplicates_view.py`: a custom `QAbstractItemModel`. Group rows show the hash prefix, size, count and reclaimable bytes; file rows show a checkbox, path, size, mtime, a badge and the reason. Results are inserted in **batches** (≤ 16 ms per batch, via `QTimer.singleShot(0)`). Space toggles the selection, and user overrides are kept separate from the recommendation.
 
 **Acceptance criteria:**
-- [ ] Keep rows start unchecked and Delete rows checked; Space and the mouse toggle; the selected size updates
-- [ ] Loading 100k files / 30k groups passes `ui_watchdog` (synthetic `ScanResult`, marked `slow`)
-- [ ] `QAbstractItemModelTester` reports no errors
+- [x] Keep rows start unchecked and Delete rows checked; Space and the mouse toggle; the selected size updates
+- [x] Loading 100k files / 30k groups passes `ui_watchdog` (synthetic `ScanResult`, marked `slow`)
+- [x] `QAbstractItemModelTester` reports no errors
 
 **Dependencies:** T12
 

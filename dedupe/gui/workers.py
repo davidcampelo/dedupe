@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 from dedupe.core.cache import HashCache
 from dedupe.core.models import CancelToken, Progress, ProgressCallback, ScanOptions
 from dedupe.core.pipeline import run_scan
+from dedupe.gui.gcutil import freeze, gc_paused
 
 PROGRESS_INTERVAL = 0.05  # seconds: at most 20 progress signals per second
 
@@ -63,7 +64,10 @@ class ScanJob(Job):
         def work(cancel: CancelToken, progress: ProgressCallback) -> Any:
             cache = HashCache() if options.use_cache else None
             try:
-                return run_scan(root, options, progress, cancel, cache)
+                with gc_paused():
+                    result = run_scan(root, options, progress, cancel, cache)
+                    freeze()  # the result is big and long-lived: keep GC passes off it
+                return result
             finally:
                 if cache is not None:
                     cache.close()

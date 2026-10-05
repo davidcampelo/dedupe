@@ -141,3 +141,18 @@ def test_close_cancels_and_waits_for_jobs(
     w.close()
     assert time.monotonic() - start < 2.0
     assert w.job is not None and w.job.done
+
+
+def test_scan_result_fills_duplicates_tab_and_selection_label(
+    qtbot: QtBot, window: MainWindow, make_tree: MakeTree
+) -> None:
+    root = make_tree({"a/x.txt": "dupdup", "b/x.txt": "dupdup", "c/x.txt": "dupdup"})
+    window.set_folder(root)
+    with qtbot.waitSignal(window.scan_finished, timeout=10000):
+        window.start_scan()
+    model = window.duplicates_tab.model
+    qtbot.waitUntil(lambda: not model.loading, timeout=5000)
+    assert model.group_count == 1 and model.file_count == 3
+    assert model.selected_count == 2  # two Delete suggestions, one Keep
+    assert window.selected_label.text() == "Selected for deletion: 12 B"
+    assert window.wasted_label.text() == "Wasted space: 12 B"
