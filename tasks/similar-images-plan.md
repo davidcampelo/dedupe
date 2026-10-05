@@ -199,10 +199,10 @@ Chunked numpy pairwise comparison; leader clustering.
 
 **Scope:** S
 
-#### Task S5: Pipeline, models, recommender
+#### Task S5: Pipeline, models, recommender ✅
 The similar chain inside `run_scan`; `SimilarGroup` and `SimilarMember`; the quality-first keeper order.
-- [ ] Off by default; with it on, exact copies collapse into `aliases` and never appear in both lists
-- [ ] A cancelled scan returns no groups; the keeper is the highest resolution; a protected file is never marked DELETE
+- [x] Off by default; with it on, exact copies collapse into `aliases` and never appear in both lists
+- [x] A cancelled scan returns no groups; the keeper is the highest resolution; a protected file is never marked DELETE
 
 **Scope:** M
 

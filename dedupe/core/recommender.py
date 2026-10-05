@@ -18,7 +18,14 @@ from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path, PurePath
 
-from dedupe.core.models import DuplicateGroup, FileEntry, Recommendation, Verdict
+from dedupe.core.models import (
+    DuplicateGroup,
+    FileEntry,
+    Recommendation,
+    SimilarGroup,
+    SimilarMember,
+    Verdict,
+)
 
 DISPOSABLE_WORDS = frozenset({"downloads", "tmp", "trash", "cache", "backup", "copy", "old"})
 COPY_NAME = re.compile(
@@ -116,6 +123,66 @@ def recommend_all(
     protected_folders = tuple(protected_folders)
     return tuple(
         replace(g, recommendations=recommend_group(g, protected_folders, root)) for g in groups
+    )
+
+
+# -- similar images -------------------------------------------------------------------------
+
+
+def quality_key(m: SimilarMember, root: Path | None = None) -> tuple[object, ...]:
+    """Best first: highest resolution, then the larger file (less compression), then the rules
+    used for exact duplicates."""
+    e = m.entry
+    return (
+        -m.pixels,
+        -e.size,
+        looks_like_copy(e.path.name),
+        in_disposable_folder(e.path, root),
+        e.mtime_ns,
+        _depth(e),
+        str(e.path),
+    )
+
+
+def recommend_similar_group(
+    group: SimilarGroup,
+    protected_folders: Iterable[str] = (),
+    root: Path | None = None,
+) -> tuple[Recommendation, ...]:
+    """Verdicts that only *inform* the user (nothing in a similar group is pre-selected): the
+    best image is Keep, every protected image is Keep, the rest are Delete."""
+    protected_folders = tuple(protected_folders)
+    members = sorted(group.members, key=lambda m: quality_key(m, root))
+    best = members[0]
+    reason = "highest resolution"
+    if len(members) > 1:
+        second = members[1]
+        if best.pixels == second.pixels:
+            reason = "larger file" if best.entry.size != second.entry.size else "best-ranked copy"
+    keep = {best.entry.path} | {
+        m.entry.path for m in members if is_protected(m.entry.path, protected_folders)
+    }
+    out = []
+    for m in group.members:
+        p = m.entry.path
+        if p == best.entry.path:
+            out.append(Recommendation(p, Verdict.KEEP, f"Kept: {reason}"))
+        elif p in keep:
+            out.append(Recommendation(p, Verdict.KEEP, "Kept: in a preferred folder"))
+        else:
+            out.append(Recommendation(p, Verdict.DELETE, f"Similar to {best.entry.path}"))
+    return tuple(out)
+
+
+def recommend_similar_all(
+    groups: Iterable[SimilarGroup],
+    protected_folders: Iterable[str] = (),
+    root: Path | None = None,
+) -> tuple[SimilarGroup, ...]:
+    protected_folders = tuple(protected_folders)
+    return tuple(
+        replace(g, recommendations=recommend_similar_group(g, protected_folders, root))
+        for g in groups
     )
 
 

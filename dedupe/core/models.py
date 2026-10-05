@@ -96,6 +96,8 @@ class ScanOptions:
     workers: int = 0  # 0 = min(4, cpu_count)
     use_cache: bool = True
     protected_folders: tuple[str, ...] = ()
+    similar_images: bool = False  # also look for near-identical images (needs dedupe[similar])
+    similarity_threshold: int = 8  # Hamming distance out of 64 bits; 0..16
 
 
 class DeleteMode(StrEnum):
@@ -130,6 +132,38 @@ class DuplicateGroup:
         return self.size * max(len(self.files) - 1, 0)
 
 
+@dataclass(frozen=True, slots=True)
+class SimilarMember:
+    entry: FileEntry
+    width: int
+    height: int
+    distance: int  # best pHash distance to the group's leader (0 for the leader itself)
+    similarity: float  # 0..1: SSIM, or derived from the distance
+    aliases: tuple[Path, ...] = ()  # exact copies and hard links collapsed into this member
+
+    @property
+    def pixels(self) -> int:
+        return self.width * self.height
+
+
+@dataclass(frozen=True, slots=True)
+class SimilarGroup:
+    """Images that look the same but are different files, so unlike a ``DuplicateGroup`` their
+    sizes differ and no member's content survives in another."""
+
+    id: str  # stable: a hash of the sorted member paths
+    members: tuple[SimilarMember, ...]
+    recommendations: tuple[Recommendation, ...] = ()
+
+    @property
+    def reclaimable(self) -> int:
+        """The summed size of every member that is not the keeper."""
+        keep = {r.path for r in self.recommendations if r.verdict is Verdict.KEEP}
+        if not keep:
+            keep = {self.members[0].entry.path}
+        return sum(m.entry.size for m in self.members if m.entry.path not in keep)
+
+
 @dataclass(frozen=True)  # no slots: ``reclaimable`` is a cached_property
 class ScanResult:
     root: Path
@@ -140,7 +174,12 @@ class ScanResult:
     files_scanned: int = 0
     cancelled: bool = False
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    similar_groups: tuple[SimilarGroup, ...] = ()
 
     @cached_property
     def reclaimable(self) -> int:
         return sum(g.reclaimable for g in self.groups)
+
+    @cached_property
+    def similar_reclaimable(self) -> int:
+        return sum(g.reclaimable for g in self.similar_groups)

@@ -20,7 +20,6 @@ import json
 import os
 import shutil
 import stat
-import time
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -32,6 +31,7 @@ from typing import IO
 import send2trash
 
 from dedupe.core import paths
+from dedupe.core.cooperate import cooperate as _cooperate
 from dedupe.core.hidden import HiddenItem
 from dedupe.core.hidden import is_protected as is_protected_name
 from dedupe.core.models import (
@@ -178,12 +178,6 @@ def groups_after(
 
 
 # -- planning guards (each is exercised by a mutation test) ---------------------------------
-
-
-def _cooperate(n: int, every: int = 256) -> None:
-    """Let other threads (a GUI event loop) take the GIL during long pure-Python loops."""
-    if n % every == 0:
-        time.sleep(0.0001)  # a real (tiny) sleep: sleep(0) can be re-won by this thread
 
 
 def _check_known_paths(
