@@ -6,15 +6,25 @@ the "cannot be recovered" checkbox, which is cleared whenever the mode changes."
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    QSortFilterProxyModel,
+    Qt,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QHeaderView,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
     QRadioButton,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -23,13 +33,62 @@ from dedupe.core.actions import ActionPlan, ActionSummary, Status
 from dedupe.core.formatting import human
 from dedupe.core.models import DeleteMode
 
-SHOWN_PATHS = 20
 ACK_TEXT = "I understand these files cannot be recovered"
 OK_TEXT = {
     DeleteMode.TRASH: "Move to Trash",
     DeleteMode.PERMANENT: "Delete permanently",
     DeleteMode.HARDLINK: "Replace with hard links",
 }
+
+
+COLUMNS = ("Name", "Size", "Modified", "Folder")
+SORT_ROLE = Qt.ItemDataRole.UserRole
+
+
+class _FilesModel(QAbstractTableModel):
+    """Every file in the plan, one row each; sortable by name, size, date or folder."""
+
+    def __init__(self, plan: ActionPlan, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._entries = [i.entry for i in plan.items]
+
+    def rowCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:  # noqa: B008
+        return 0 if parent.isValid() else len(self._entries)
+
+    def columnCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:  # noqa: B008
+        return 0 if parent.isValid() else len(COLUMNS)
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = 0) -> Any:
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return COLUMNS[section]
+        return None
+
+    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = 0) -> Any:
+        if not index.isValid():
+            return None
+        entry = self._entries[index.row()]
+        col = index.column()
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0:
+                return entry.path.name
+            if col == 1:
+                return human(entry.size)
+            if col == 2:
+                return datetime.fromtimestamp(entry.mtime_ns / 1e9).strftime("%Y-%m-%d %H:%M")
+            return str(entry.path.parent)
+        if role == SORT_ROLE:
+            if col == 0:
+                return entry.path.name.casefold()
+            if col == 1:
+                return entry.size
+            if col == 2:
+                return entry.mtime_ns
+            return str(entry.path.parent).casefold()
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return str(entry.path)
+        if role == Qt.ItemDataRole.TextAlignmentRole and col == 1:
+            return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,20 +107,29 @@ class DeleteDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Delete selected files")
         self.plan = plan
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(700)
 
         count = len(plan.items)
         self.summary_label = QLabel(
             f"<b>{count} file{'s' if count != 1 else ''}</b> selected, {human(plan.total_size)} "
             "to reclaim. One copy of every group is always kept."
         )
-        self.paths_view = QPlainTextEdit()
-        self.paths_view.setReadOnly(True)
-        lines = [str(i.entry.path) for i in plan.items[:SHOWN_PATHS]]
-        if count > SHOWN_PATHS:
-            lines.append(f"… and {count - SHOWN_PATHS} more")
-        self.paths_view.setPlainText("\n".join(lines))
-        self.paths_view.setMaximumHeight(160)
+        self.files_model = _FilesModel(plan, self)
+        self.proxy = QSortFilterProxyModel(self)
+        self.proxy.setSourceModel(self.files_model)
+        self.proxy.setSortRole(SORT_ROLE)
+        self.paths_view = QTableView()
+        self.paths_view.setModel(self.proxy)
+        self.paths_view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+        self.paths_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.paths_view.setSortingEnabled(True)
+        self.paths_view.verticalHeader().setVisible(False)
+        header = self.paths_view.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self.paths_view.setColumnWidth(0, 200)
+        self.paths_view.sortByColumn(3, Qt.SortOrder.AscendingOrder)
+        self.paths_view.setMinimumHeight(220)
 
         self.trash_radio = QRadioButton("Move to Trash (recoverable)")
         self.permanent_radio = QRadioButton("Delete permanently")

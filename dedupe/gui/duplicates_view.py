@@ -302,8 +302,24 @@ class DuplicatesModel(QAbstractTableModel):
             self.expand(node)
 
     def expand_all(self) -> None:
-        for node in list(self._groups):
-            self.expand(node)
+        self._set_all_expanded(True)
+
+    def collapse_all(self) -> None:
+        self._set_all_expanded(False)
+
+    def _set_all_expanded(self, expanded: bool) -> None:
+        """One reset instead of per-group inserts (each of which renumbers every later group)."""
+        if all(node.expanded == expanded for node in self._groups):
+            return
+        self.beginResetModel()
+        self._rows = []
+        for node in self._groups:
+            node.expanded = expanded
+            node.row = len(self._rows)
+            self._rows.append(node)
+            if expanded:
+                self._rows.extend(node.files)
+        self.endResetModel()
 
     def _renumber_after(self, node: GroupNode, delta: int) -> None:
         for g in self._groups[node.index + 1 :]:
@@ -772,6 +788,12 @@ class DuplicatesTab(QWidget):
         self.grid_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.grid_button.setCheckable(True)
         self.grid_button.setToolTip("Browse image groups as a grid of thumbnails")
+        self.expand_button = QToolButton()
+        self.expand_button.setText("Expand all")
+        self.expand_button.setToolTip("Expand every group")
+        self.collapse_button = QToolButton()
+        self.collapse_button.setText("Collapse all")
+        self.collapse_button.setToolTip("Collapse every group")
         self.bulk_button = QToolButton()
         self.bulk_button.setText("Bulk rules")
         self.bulk_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -785,6 +807,8 @@ class DuplicatesTab(QWidget):
         filters.addWidget(self.type_combo)
         filters.addWidget(self.filter_edit, 1)
         filters.addWidget(self.grid_button)
+        filters.addWidget(self.expand_button)
+        filters.addWidget(self.collapse_button)
         filters.addWidget(self.bulk_button)
 
         self.summary = QLabel("Scan a folder to find duplicates.")
@@ -835,6 +859,8 @@ class DuplicatesTab(QWidget):
         self.view.protect_folder_requested.connect(self.folder_protected)
         self.view.group_activated.connect(self._on_group_activated)
         self.grid_button.toggled.connect(self._set_grid_mode)
+        self.expand_button.clicked.connect(self.model.expand_all)
+        self.collapse_button.clicked.connect(self.model.collapse_all)
         self.grid.group_selected.connect(self._on_grid_selected)
         self.model.load_finished.connect(self._refresh_grid)
 
@@ -992,6 +1018,8 @@ class DuplicatesTab(QWidget):
 
     def _set_grid_mode(self, on: bool) -> None:
         current = self.view.current_group() if not self.grid_mode else self.grid.selected_group()
+        self.expand_button.setEnabled(not on)
+        self.collapse_button.setEnabled(not on)
         if on:
             self.stack.setCurrentWidget(self.grid)
             self._refresh_grid(select=current)

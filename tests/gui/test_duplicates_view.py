@@ -93,6 +93,10 @@ def test_expand_and_collapse_keep_rows_consistent(qtbot: QtBot) -> None:
     assert model.rowCount() == 4
     model.expand_all()
     assert model.rowCount() == 16
+    assert [g.row for g in model._groups] == [0, 4, 8, 12]
+    model.collapse_all()
+    assert model.rowCount() == 4 and [g.row for g in model._groups] == [0, 1, 2, 3]
+    assert not any(g.expanded for g in model._groups)
 
 
 def test_model_passes_qt_model_tester(qtbot: QtBot) -> None:

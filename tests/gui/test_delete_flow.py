@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog
 from pytestqt.qtbot import QtBot
 
@@ -16,7 +17,7 @@ from dedupe.core.settings import Settings
 from dedupe.gui import workers
 from dedupe.gui.delete_dialog import (
     ACK_TEXT,
-    SHOWN_PATHS,
+    SORT_ROLE,
     DeleteChoice,
     DeleteDialog,
     format_summary,
@@ -109,7 +110,7 @@ def test_dialog_defaults_to_trash_and_lists_the_selection(
     qtbot.addWidget(dlg)
     assert dlg.mode is DeleteMode.TRASH and dlg.ok_button.isEnabled()
     assert "2 files" in dlg.summary_label.text() and "8 B" in dlg.summary_label.text()
-    assert dlg.paths_view.toPlainText().count("\n") == 1
+    assert dlg.proxy.rowCount() == 2
     assert not dlg.ack_box.isVisibleTo(dlg) and dlg.ok_button.text() == "Move to Trash"
     assert dlg.hardlink_radio.isEnabled()
     assert dlg.choice == DeleteChoice(DeleteMode.TRASH, False)
@@ -117,11 +118,18 @@ def test_dialog_defaults_to_trash_and_lists_the_selection(
     assert dlg.choice.dry_run
 
 
-def test_dialog_truncates_long_path_lists(qtbot: QtBot, make_tree: MakeTree) -> None:
-    dlg = DeleteDialog(plan_for(make_tree, SHOWN_PATHS + 6))
+def test_dialog_lists_every_file_and_sorts_by_each_column(
+    qtbot: QtBot, make_tree: MakeTree
+) -> None:
+    n = 30
+    dlg = DeleteDialog(plan_for(make_tree, n))
     qtbot.addWidget(dlg)
-    text = dlg.paths_view.toPlainText()
-    assert text.splitlines()[-1] == "… and 5 more" and len(text.splitlines()) == SHOWN_PATHS + 1
+    assert dlg.proxy.rowCount() == n - 1  # no truncation
+    for col in range(4):
+        for order in (Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder):
+            dlg.paths_view.sortByColumn(col, order)
+            keys = [dlg.proxy.index(r, col).data(SORT_ROLE) for r in range(dlg.proxy.rowCount())]
+            assert keys == sorted(keys, reverse=order is Qt.SortOrder.DescendingOrder)
 
 
 def test_permanent_needs_the_checkbox_and_switching_modes_clears_it(
