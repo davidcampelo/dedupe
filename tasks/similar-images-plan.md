@@ -185,17 +185,17 @@ Similar images are **different files**. Every rule that relies on "the content s
 
 **Scope:** S
 
-#### Task S4: Candidates and clustering
+#### Task S4: Candidates and clustering ✅
 Chunked numpy pairwise comparison; leader clustering.
-- [ ] Hypothesis: every member has an accepted pair with its leader; the output doesn't depend on input order; the candidates match a pure-Python brute-force reference
-- [ ] Cancel mid-run returns within 100 ms
+- [x] Hypothesis: every member has an accepted pair with its leader; the output doesn't depend on input order; the candidates match a pure-Python brute-force reference
+- [x] Cancel mid-run returns within 100 ms
 
 **Scope:** M
 
-#### Task S4b: SSIM verification
-- [ ] A grey-zone pair of the same photo (heavily re-compressed and resized) passes
-- [ ] A grey-zone pair of different photos with a similar layout fails
-- [ ] A pair already within the threshold skips SSIM
+#### Task S4b: SSIM verification ✅
+- [x] A grey-zone pair of the same photo (heavily re-compressed and resized) passes
+- [x] A grey-zone pair of different photos with a similar layout fails
+- [x] A pair already within the threshold skips SSIM
 
 **Scope:** S
 
