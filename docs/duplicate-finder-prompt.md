@@ -130,6 +130,9 @@ Show each match with path, size, type (file/folder), and a category label. Impor
 
 Remember window size, splitter positions, and last folder between sessions. Support keyboard navigation (arrows, Space to toggle, Delete key opens the confirmation dialog).
 
+**UI**
+- Use icons defined in the docs folder.
+
 ## 8. CLI
 
 `dedupe scan PATH [--min-size N] [--exclude GLOB]... [--json]` prints duplicate groups and recommendations. `dedupe hidden PATH [--json]` lists hidden/temp files. The CLI never deletes; it's for scripting and testing.
