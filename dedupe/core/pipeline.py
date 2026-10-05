@@ -15,6 +15,7 @@ from dedupe.core.models import (
     ScanResult,
     SkippedEntry,
 )
+from dedupe.core.recommender import recommend_all
 from dedupe.core.scanner import scan_files
 
 
@@ -47,7 +48,7 @@ def run_scan(
     return ScanResult(
         root=root,
         warnings=warnings,
-        groups=outcome.groups,
+        groups=recommend_all(outcome.groups, options.protected_folders, root),
         empty_files=outcome.empty_files,
         hardlink_sets=outcome.hardlink_sets,
         skipped=tuple(skipped) + outcome.skipped,

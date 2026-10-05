@@ -108,7 +108,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 
 ### Phase 2: Complete the core
 - [x] T5: SQLite hash cache + clear cache
-- [ ] T6: Recommender + bulk-rule helpers
+- [x] T6: Recommender + bulk-rule helpers
 - [ ] T7: Hidden/temp detector + `dedupe hidden` CLI
 - [ ] T8: Settings (TOML, XDG paths, validation)
 - [ ] T9: Actions, part 1: plan, guards, dry run, trash, log, progress/cancel

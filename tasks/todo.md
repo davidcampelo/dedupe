@@ -112,14 +112,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** S
 
-### Task 6: Recommender
+### Task 6: Recommender ✅
 
 **Description:** `core/recommender.py` applies the spec §5 rules in order and produces exactly one Keep plus a reason per group. Protected files are never marked Delete. Bulk helpers: keep newest, keep in folder X, select all suggested. The output appears in the CLI.
 
 **Acceptance criteria:**
-- [ ] A parametrized test per rule proves that rule decides when the earlier rules tie
-- [ ] Property test: exactly one Keep per group, and no protected file is ever marked Delete
-- [ ] An all-protected group marks every file Keep
+- [x] A parametrized test per rule proves that rule decides when the earlier rules tie
+- [x] Property test: exactly one Keep per group, and no protected file is ever marked Delete
+- [x] An all-protected group marks every file Keep
 
 **Dependencies:** T1, T4
 

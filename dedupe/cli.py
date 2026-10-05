@@ -13,7 +13,14 @@ from typing import Any
 
 from dedupe import __version__
 from dedupe.core.cache import HashCache
-from dedupe.core.models import CancelToken, Progress, ScanOptions, ScanResult
+from dedupe.core.models import (
+    CancelToken,
+    DuplicateGroup,
+    FileEntry,
+    Progress,
+    ScanOptions,
+    ScanResult,
+)
 from dedupe.core.pipeline import run_scan
 
 
@@ -24,6 +31,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     scan = sub.add_parser("scan", help="find duplicate files (never deletes)")
     scan.add_argument("path", type=Path)
+    scan.add_argument(
+        "--protect",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="never suggest deleting files here",
+    )
     scan.add_argument("--min-size", type=int, default=1, metavar="N", help="bytes (default 1)")
     scan.add_argument("--exclude", action="append", default=[], metavar="GLOB")
     scan.add_argument("--json", action="store_true", help="machine-readable output")
@@ -45,6 +59,17 @@ def human(n: int) -> str:
             return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     raise AssertionError  # pragma: no cover
+
+
+def _file_json(g: DuplicateGroup, f: FileEntry) -> dict[str, Any]:
+    rec = next((r for r in g.recommendations if r.path == f.path), None)
+    return {
+        "path": str(f.path),
+        "size": f.size,
+        "mtime_ns": f.mtime_ns,
+        "verdict": rec.verdict.value if rec else None,
+        "reason": rec.reason if rec else None,
+    }
 
 
 def result_to_json(result: ScanResult) -> dict[str, Any]:
@@ -82,8 +107,12 @@ def print_table(result: ScanResult, out: Any = None) -> None:
         print(
             f"\n{g.hash[:12]}  {human(g.size)} x {len(g.files)}  ({human(g.reclaimable)})", file=out
         )
+        verdicts = {r.path: r for r in g.recommendations}
         for f in g.files:
-            print(f"  {f.path}", file=out)
+            rec = verdicts.get(f.path)
+            tag = f"[{rec.verdict.value.upper()}] " if rec else ""
+            note = f"  ({rec.reason})" if rec else ""
+            print(f"  {tag}{f.path}{note}", file=out)
         for p in g.hardlinked:
             print(f"  {p}  (hard link)", file=out)
     if result.empty_files:
@@ -111,6 +140,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         cross_filesystems=args.cross_filesystems,
         include_hidden=not args.no_hidden,
         use_cache=not args.no_cache,
+        protected_folders=tuple(str(Path(p).resolve()) for p in args.protect),
     )
     cancel = CancelToken()
     previous = signal.signal(signal.SIGINT, lambda *_: cancel.cancel())
