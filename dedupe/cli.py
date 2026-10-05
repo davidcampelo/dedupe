@@ -13,6 +13,7 @@ from typing import Any
 
 from dedupe import __version__
 from dedupe.core.cache import HashCache
+from dedupe.core.hidden import scan_hidden
 from dedupe.core.models import (
     CancelToken,
     DuplicateGroup,
@@ -46,6 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--cross-filesystems", action="store_true")
     scan.add_argument("--no-cache", action="store_true", help="do not read or write the hash cache")
     scan.add_argument("--no-hidden", action="store_true", help="skip hidden files")
+    hidden = sub.add_parser("hidden", help="list hidden and temporary files (never deletes)")
+    hidden.add_argument("path", type=Path)
+    hidden.add_argument("--json", action="store_true", help="machine-readable output")
+    hidden.add_argument("--no-temp-patterns", action="store_true", help="only dot/tilde names")
     cache = sub.add_parser("cache", help="manage the hash cache")
     cache_sub = cache.add_subparsers(dest="cache_command", required=True)
     cache_sub.add_parser("clear", help="forget every cached hash")
@@ -171,12 +176,57 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_hidden(args: argparse.Namespace) -> int:
+    root: Path = args.path
+    if not root.is_dir():
+        print(f"dedupe: error: not a directory: {root}", file=sys.stderr)
+        return 2
+    cancel = CancelToken()
+    previous = signal.signal(signal.SIGINT, lambda *_: cancel.cancel())
+    try:
+        result = scan_hidden(root, cancel, temp_patterns=not args.no_temp_patterns)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    if result.cancelled:
+        print("dedupe: cancelled", file=sys.stderr)
+        return 130
+    if args.json:
+        payload = {
+            "root": str(root),
+            "reclaimable_preselected": sum(i.size for i in result.items if i.preselect),
+            "items": [
+                {
+                    "path": str(i.path),
+                    "type": "folder" if i.is_dir else "file",
+                    "size": i.size,
+                    "category": i.category,
+                    "protected": i.protected,
+                    "home_toplevel_dot": i.home_toplevel_dot,
+                    "preselect": i.preselect,
+                }
+                for i in result.items
+            ],
+            "skipped": [{"path": s.path, "reason": s.reason} for s in result.skipped],
+        }
+        json.dump(payload, sys.stdout, indent=2)
+        print()
+    else:
+        for i in result.items:
+            flags = ("protected " if i.protected else "") + ("preselected" if i.preselect else "")
+            kind = "dir " if i.is_dir else "file"
+            print(f"{kind} {human(i.size):>10}  {i.category:<18} {i.path}  {flags.strip()}")
+        print(f"{len(result.items)} items, {len(result.skipped)} skipped")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
         if args.command == "scan":
             return _cmd_scan(args)
+        if args.command == "hidden":
+            return _cmd_hidden(args)
         if args.command == "cache":
             cache = HashCache()
             try:

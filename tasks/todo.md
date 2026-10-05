@@ -127,14 +127,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** S
 
-### Task 7: Hidden/temp detector and `dedupe hidden` CLI
+### Task 7: Hidden/temp detector and `dedupe hidden` CLI ✅
 
 **Description:** `core/hidden.py` classifies `.x`, `~x`, `~$x`, `x~` and the optional temp patterns. Each result carries a category, a type, its size (recursive for dirs) and the `protected`, `home_toplevel_dot` and `preselect` flags (`*.swp` is preselected only when no `/proc/*/fd` holds it). Adds `dedupe hidden PATH [--json]`.
 
 **Acceptance criteria:**
-- [ ] `.x`, `~x`, `x~` and `~$x.docx` are classified correctly; a dot folder is reported once
-- [ ] Protected dotfiles are flagged and never preselected
-- [ ] A swap file held open by a test process is not preselected
+- [x] `.x`, `~x`, `x~` and `~$x.docx` are classified correctly; a dot folder is reported once
+- [x] Protected dotfiles are flagged and never preselected
+- [x] A swap file held open by a test process is not preselected
 
 **Dependencies:** T2
 
