@@ -301,3 +301,24 @@ def test_hidden_scan_of_a_50k_entry_tree_never_stalls_the_gui(
         qtbot.wait(50)
     assert tab.model.rowCount() == 25000
     runner.shutdown()
+
+
+def test_select_all_asks_once_for_risky_items_and_can_be_declined(
+    populated: HiddenFilesTab,
+) -> None:
+    m = populated.model
+    asked: list[int] = []
+    answers = iter([False, True])
+
+    def confirm(count: int) -> bool:
+        asked.append(count)
+        return next(answers)
+
+    m.confirm_risky_bulk = confirm
+    populated.select_all_button.click()
+    assert m.selected_count == 2 and asked == [1]  # declined: selection unchanged
+    populated.select_all_button.click()
+    assert m.selected_count == 5 and asked == [1, 1]
+    assert m.selected_size == sum(i.size for i in m.items)
+    populated.select_none_button.click()
+    assert m.selected_count == 0

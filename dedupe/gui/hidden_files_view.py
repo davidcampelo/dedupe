@@ -59,6 +59,8 @@ class HiddenModel(QAbstractTableModel):
         self.selected_size = 0
         # Asked before ticking a risky item; returning False leaves it unticked.
         self.confirm_risky: Any = lambda item: True
+        # Asked once before select_all ticks risky items (given their count).
+        self.confirm_risky_bulk: Any = lambda count: True
 
     def set_items(self, items: Sequence[HiddenItem]) -> None:
         self.beginResetModel()
@@ -110,6 +112,16 @@ class HiddenModel(QAbstractTableModel):
         self.beginResetModel()
         self._checked = {i for i, it in enumerate(self.items) if it.preselect}
         self.selected_size = sum(self.items[i].size for i in self._checked)
+        self.endResetModel()
+        self.selection_changed.emit()
+
+    def select_all(self) -> None:
+        risky = sum(1 for it in self.items if it.protected or it.home_toplevel_dot)
+        if risky and not self.confirm_risky_bulk(risky):
+            return
+        self.beginResetModel()
+        self._checked = set(range(len(self.items)))
+        self.selected_size = sum(it.size for it in self.items)
         self.endResetModel()
         self.selection_changed.emit()
 
@@ -208,6 +220,7 @@ class HiddenFilesTab(QWidget):
         super().__init__(parent)
         self.model = HiddenModel(self)
         self.model.confirm_risky = self.confirm_risky
+        self.model.confirm_risky_bulk = self.confirm_risky_bulk
         self.intro = QLabel(
             "Hidden and temporary files. Only clearly disposable items are ticked; "
             "configuration such as .bashrc or .ssh is listed but never ticked for you."
@@ -231,6 +244,7 @@ class HiddenFilesTab(QWidget):
         self.warning.hide()
         self.total_label = QLabel("")
         self.select_suggested_button = QPushButton("Select suggested")
+        self.select_all_button = QPushButton("Select all")
         self.select_none_button = QPushButton("Select none")
         self.delete_button = QPushButton(icons.icon("move-to-trash"), "Delete selected…")
         self.delete_button.setEnabled(False)
@@ -238,6 +252,7 @@ class HiddenFilesTab(QWidget):
 
         bar = QHBoxLayout()
         bar.addWidget(self.select_suggested_button)
+        bar.addWidget(self.select_all_button)
         bar.addWidget(self.select_none_button)
         bar.addWidget(self.total_label, 1)
         bar.addWidget(self.delete_button)
@@ -251,6 +266,7 @@ class HiddenFilesTab(QWidget):
 
         self.model.selection_changed.connect(self._refresh)
         self.select_suggested_button.clicked.connect(self.model.select_suggested)
+        self.select_all_button.clicked.connect(self.model.select_all)
         self.select_none_button.clicked.connect(self.model.select_none)
         self.delete_button.clicked.connect(self.delete_requested)
         self.view.delete_requested.connect(self._maybe_delete)
@@ -288,6 +304,18 @@ class HiddenFilesTab(QWidget):
             "Select this item?",
             f"{item.path}\n\n{reason}\nDeleting it can break programs or lose settings.\n\n"
             "Select it anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def confirm_risky_bulk(self, count: int) -> bool:
+        answer = QMessageBox.warning(
+            self,
+            "Select all items?",
+            f"{count} of the items are protected configuration or inside your home folder's "
+            "hidden folders.\nDeleting them can break programs or lose settings.\n\n"
+            "Select everything anyway?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
