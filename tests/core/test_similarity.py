@@ -14,9 +14,13 @@ from dedupe.core.perceptual import VARIANTS, PerceptualHash
 from dedupe.core.similarity import (
     Accepted,
     Candidate,
+    aligned_ssim,
     candidate_bound,
     find_candidates,
     leader_clusters,
+    merge_candidates,
+    scene_candidates,
+    shifts,
     ssim,
     verify,
 )
@@ -24,8 +28,9 @@ from dedupe.core.similarity import (
 MASK64 = (1 << 64) - 1
 
 
-def make_hash(variants: list[tuple[int, int]]) -> PerceptualHash:
-    return PerceptualHash(variants[0][0], variants[0][1], tuple(variants), 10, 10)
+def make_hash(variants: list[tuple[int, int]], taken: int | None = None) -> PerceptualHash:
+    sketch = b"" if taken is None else bytes(32 * 32)
+    return PerceptualHash(variants[0][0], variants[0][1], tuple(variants), 10, 10, taken, sketch)
 
 
 def dist(a: int, b: int) -> int:
@@ -125,6 +130,56 @@ def test_cancel_mid_run_returns_within_100_ms() -> None:
     assert time.perf_counter() - stamp[0] < 0.1
 
 
+# -- scene candidates ---------------------------------------------------------------------
+
+
+def timed(*times: int | None) -> list[PerceptualHash]:
+    return [make_hash([(i, 0)] * VARIANTS, t) for i, t in enumerate(times)]
+
+
+def test_shots_within_the_window_are_paired_whatever_their_hashes() -> None:
+    hashes = [make_hash([(0, 0)] * VARIANTS, 100), make_hash([(MASK64, MASK64)] * VARIANTS, 104)]
+    [c] = scene_candidates(hashes)
+    assert (c.i, c.j, c.variant, c.phash, c.dhash, c.by_time) == (0, 1, 0, 64, 64, True)
+
+
+def test_shots_further_apart_than_the_window_are_not_paired() -> None:
+    hashes = timed(0, similarity.SCENE_WINDOW + 1)
+    assert scene_candidates(hashes) == []
+    assert len(scene_candidates(timed(0, similarity.SCENE_WINDOW))) == 1
+
+
+def test_images_without_a_capture_time_are_never_scene_candidates() -> None:
+    assert scene_candidates(timed(None, None, 5)) == []
+
+
+def test_images_without_a_sketch_are_never_scene_candidates() -> None:
+    hashes = [PerceptualHash(1, 1, ((1, 1),) * VARIANTS, 10, 10, 5) for _ in range(2)]
+    assert scene_candidates(hashes) == []
+
+
+def test_scene_pairs_follow_capture_order_not_index_order() -> None:
+    pairs = {(c.i, c.j) for c in scene_candidates(timed(1000, 0, 1005, 3), window=10)}
+    assert pairs == {(1, 3), (0, 2)}
+
+
+def test_a_long_burst_pairs_each_shot_with_a_bounded_number_of_neighbours() -> None:
+    hashes = timed(*range(50))
+    found = scene_candidates(hashes, neighbours=4)
+    assert len(found) == sum(min(4, 49 - k) for k in range(50))
+    assert all(c.j - c.i <= 4 for c in found)
+
+
+def test_merge_keeps_one_candidate_per_pair() -> None:
+    by_hash = [Candidate(0, 2, 5, 3, 3), Candidate(1, 2, 0, 9, 9)]
+    by_time = [Candidate(0, 1, 0, 20, 20, True), Candidate(0, 2, 0, 30, 30, True)]
+    assert merge_candidates(by_hash, by_time) == [
+        by_time[0],
+        Candidate(0, 2, 5, 3, 3, True),  # the hash's variant, judged as taken seconds apart
+        by_hash[1],
+    ]
+
+
 # -- ssim and verify ------------------------------------------------------------------------
 
 
@@ -181,6 +236,79 @@ def test_grey_zone_pair_is_compared_through_its_variant() -> None:
     thumbs = {0: a, 1: np.ascontiguousarray(np.rot90(a))}
     assert verify(Candidate(0, 1, 0, 11, 12), 8, thumbs.get) is None  # wrong alignment
     assert verify(Candidate(0, 1, 1, 11, 12), 8, thumbs.get) is not None  # variant 1 = rot90
+
+
+def test_shift_is_recovered_by_phase_correlation() -> None:
+    big = smooth_large(3)
+    a, b = big[8:72, 8:72], big[11:75, 3:67]  # b's content sits 5 right and 3 up of a's
+    assert shifts(a.astype(float), b.astype(float))[0] == (-5, 3)
+
+
+def smooth_large(seed: int) -> np.ndarray:
+    from PIL import Image
+
+    rng = np.random.default_rng(seed)
+    coarse = rng.integers(0, 256, (12, 12), dtype=np.uint8)
+    return np.asarray(Image.fromarray(coarse).resize((96, 96), Image.Resampling.BICUBIC))
+
+
+def test_a_shifted_shot_passes_aligned_ssim_but_not_plain_ssim() -> None:
+    big = smooth_large(3)
+    a, b = big[8:72, 8:72], big[14:78, 0:64]
+    assert ssim(a, b) < 0.6
+    assert aligned_ssim(a, b) >= 0.99
+
+
+def test_aligned_ssim_never_drops_below_plain_ssim() -> None:
+    a = smooth(1)
+    rng = np.random.default_rng(5)
+    noisy = np.clip(a.astype(int) + rng.integers(-20, 21, a.shape), 0, 255).astype(np.uint8)
+    assert aligned_ssim(a, noisy) >= ssim(a, noisy)
+
+
+def test_aligned_ssim_of_unrelated_images_stays_low() -> None:
+    worst = max(aligned_ssim(smooth(s), smooth(s + 100)) for s in range(40))
+    assert worst < 0.6
+
+
+def test_a_shift_beyond_the_limit_is_not_aligned() -> None:
+    big = smooth_large(3)
+    far = round(similarity.MAX_SHIFT * 64) + 6
+    assert aligned_ssim(big[0:64, 0:64], big[0:64, far : far + 64]) < similarity.SSIM_MIN
+
+
+def test_shifted_shot_of_the_same_scene_passes_verify() -> None:
+    big = smooth_large(5)
+    thumbs = {0: big[8:72, 8:72], 1: big[12:76, 2:66]}
+    got = verify(Candidate(0, 1, 0, 22, 25), 8, thumbs.get)
+    assert got is not None and got.similarity >= similarity.SSIM_MIN and got.distance == 22
+
+
+def sketch_of(a: np.ndarray) -> np.ndarray:
+    return a.reshape(32, 2, 32, 2).mean(axis=(1, 3)).round().astype(np.uint8)
+
+
+def test_shots_taken_seconds_apart_are_judged_on_their_sketches() -> None:
+    big = smooth_large(5)
+    sketches = {0: sketch_of(big[8:72, 8:72]), 1: sketch_of(big[12:76, 2:66])}
+    got = verify(Candidate(0, 1, 0, 30, 30, by_time=True), 8, never, sketches.get)  # type: ignore[arg-type]
+    assert got is not None and got.similarity >= similarity.SCENE_SSIM_MIN
+
+
+def test_unrelated_shots_taken_seconds_apart_are_rejected() -> None:
+    sketches = {0: sketch_of(smooth(4)), 1: sketch_of(smooth(9))}
+    assert verify(Candidate(0, 1, 0, 30, 30, by_time=True), 8, never, sketches.get) is None  # type: ignore[arg-type]
+
+
+def test_shots_taken_seconds_apart_without_sketches_are_rejected() -> None:
+    assert verify(Candidate(0, 1, 0, 30, 30, by_time=True), 8, never) is None  # type: ignore[arg-type]
+    assert verify(Candidate(0, 1, 0, 30, 30, by_time=True), 8, never, {}.get) is None  # type: ignore[arg-type]
+
+
+def test_scene_bar_sits_between_the_real_pairs_and_unrelated_images() -> None:
+    assert similarity.SCENE_SSIM_MIN < similarity.SSIM_MIN
+    worst = max(aligned_ssim(sketch_of(smooth(s)), sketch_of(smooth(s + 100))) for s in range(40))
+    assert worst < similarity.SCENE_SSIM_MIN - 0.15
 
 
 def test_grey_zone_pair_with_an_unreadable_image_is_rejected() -> None:

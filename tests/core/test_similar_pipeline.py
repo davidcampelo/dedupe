@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from dedupe.core import similarity
 from dedupe.core.models import (
     CancelToken,
     Progress,
@@ -17,7 +18,7 @@ from dedupe.core.models import (
     Verdict,
 )
 from dedupe.core.pipeline import run_scan
-from tests.core.imagegen import photo, save
+from tests.core.imagegen import photo, save, shot, taken_at
 
 pytest.importorskip("imagehash")
 
@@ -165,3 +166,28 @@ def test_threshold_extremes_still_work(pics: Path, threshold: int) -> None:
     options = ScanOptions(exclude=(), similar_images=True, similarity_threshold=threshold)
     result = run_scan(pics, options)
     assert all(len(g.members) >= 2 for g in result.similar_groups)
+
+
+# -- the same scene, shot again after the camera moved -----------------------------------------
+
+
+def scene(root: Path, second: str) -> Path:
+    """Two shots of one scene, the second moved 40 px right and 30 px down. Their hashes are 20+
+    bits apart (out of reach of every threshold), so only the capture times bring them together."""
+    big = photo(2, (800, 600))
+    save(shot(big, 0, 0), root / "DSC_0051.jpg", exif=taken_at("2011:05:01 06:08:58"))
+    save(shot(big, 40, 30), root / "DSC_0052.jpg", exif=taken_at(second))
+    save(photo(3, (680, 510)), root / "other.jpg", exif=taken_at("2011:05:01 06:09:00"))
+    return root
+
+
+def test_shots_of_the_same_scene_seconds_apart_group_together(tmp_path: Path) -> None:
+    result = run_scan(scene(tmp_path / "pics", "2011:05:01 06:09:02"), ON)
+    [group] = names(result)
+    assert sorted(group) == ["DSC_0051.jpg", "DSC_0052.jpg"]
+    member = result.similar_groups[0].members[1]
+    assert member.distance > 16 and member.similarity >= similarity.SCENE_SSIM_MIN
+
+
+def test_shots_of_the_same_scene_an_hour_apart_are_not_compared(tmp_path: Path) -> None:
+    assert run_scan(scene(tmp_path / "pics", "2011:05:01 07:09:02"), ON).similar_groups == ()

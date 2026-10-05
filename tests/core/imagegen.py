@@ -29,3 +29,20 @@ def letterboxed(img: Image.Image, pad: int = 40) -> Image.Image:
 
 def distance(a: int, b: int) -> int:
     return (a ^ b).bit_count()
+
+
+def shot(img: Image.Image, dx: int, dy: int, keep: float = 0.85) -> Image.Image:
+    """The same scene after the camera moved: a crop of ``keep`` of the frame, offset by
+    (dx, dy) pixels from the top-left one."""
+    w, h = int(img.width * keep), int(img.height * keep)
+    return img.crop((dx, dy, dx + w, dy + h))
+
+
+def taken_at(when: str, original: bool = True) -> Image.Exif:
+    """EXIF carrying a capture time ("YYYY:MM:DD HH:MM:SS"), as DateTimeOriginal or DateTime."""
+    exif = Image.Exif()
+    if original:
+        exif.get_ifd(0x8769)[36867] = when
+    else:
+        exif[306] = when
+    return exif

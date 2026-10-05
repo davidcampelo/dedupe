@@ -1,6 +1,7 @@
 """The similar-images chain, run after the exact-duplicate pass inside ``run_scan``.
 
-    ImageFilter -> Hardlink -> CollapseExact -> PerceptualHash -> Candidates -> Verify -> Cluster
+    ImageFilter -> Hardlink -> CollapseExact -> PerceptualHash -> Candidates (hash distance, and
+    shots taken seconds apart) -> Verify -> Cluster
 
 It is a chain of its own because the exact chain starts with ``SizeStage`` and similar images
 almost never have the same size. Files that are byte-identical (or hard links of each other)
@@ -111,7 +112,10 @@ def find_similar(
             progress(Progress(Stage.SIMILAR, done, total, ""))
 
     bound = similarity.candidate_bound(threshold)
-    candidates = similarity.find_candidates(usable, bound, cancel, on_rows)
+    candidates = similarity.merge_candidates(
+        similarity.find_candidates(usable, bound, cancel, on_rows),
+        similarity.scene_candidates(usable),
+    )
 
     thumbs: dict[int, npt.NDArray[np.uint8] | None] = {}
 
@@ -124,11 +128,14 @@ def find_similar(
                 thumbs[idx] = None
         return thumbs[idx]
 
+    def sketch(idx: int) -> npt.NDArray[np.uint8] | None:
+        return usable[idx].sketch_pixels()
+
     accepted: dict[tuple[int, int], similarity.Accepted] = {}
     for n, cand in enumerate(candidates):
         cancel.raise_if_cancelled()
         cooperate(n, 64)
-        result = similarity.verify(cand, threshold, thumbnail)
+        result = similarity.verify(cand, threshold, thumbnail, sketch)
         if result is not None:
             accepted[(cand.i, cand.j)] = result
 

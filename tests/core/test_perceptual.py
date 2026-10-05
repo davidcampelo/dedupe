@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageEnhance
 from dedupe.core import perceptual
 from dedupe.core.imaging import ImageLoadError
 from dedupe.core.perceptual import PerceptualHash, perceptual_hash
-from tests.core.imagegen import distance, letterboxed, photo, save
+from tests.core.imagegen import distance, letterboxed, photo, save, taken_at
 
 pytest.importorskip("imagehash")
 
@@ -134,9 +134,55 @@ def test_encode_decode_roundtrip(tmp_path: Path, original: Any) -> None:
     assert PerceptualHash.decode(flat.encode()) == flat
 
 
-@pytest.mark.parametrize("text", ["", "x", "1,2;abc", "1,2;" + "0" * 32, "a,b;"])
+def test_encode_decode_roundtrip_keeps_the_capture_time(tmp_path: Path) -> None:
+    h = hash_of(photo(1), tmp_path, "t.jpg", exif=taken_at("2011:05:01 06:08:58"))
+    assert h.taken is not None
+    assert PerceptualHash.decode(h.encode()) == h
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "x", "1,2;abc", "1,2;" + "0" * 32, "a,b;", "1,2,3,4;", "1,2,x;", "1,2;|!!", "1,2;|AAAA"],
+)
 def test_decode_rejects_malformed_text(text: str) -> None:
     assert PerceptualHash.decode(text) is None
+
+
+def test_capture_time_comes_from_exif(tmp_path: Path) -> None:
+    first = hash_of(photo(1), tmp_path, "a.jpg", exif=taken_at("2011:05:01 06:08:58"))
+    later = hash_of(photo(1), tmp_path, "b.jpg", exif=taken_at("2011:05:01 06:09:02"))
+    assert first.taken is not None and later.taken is not None
+    assert later.taken - first.taken == 4
+
+
+def test_capture_time_falls_back_to_datetime(tmp_path: Path) -> None:
+    exif = taken_at("2011:05:01 06:08:58", original=False)
+    assert hash_of(photo(1), tmp_path, "a.jpg", exif=exif).taken is not None
+
+
+@pytest.mark.parametrize("when", ["0000:00:00 00:00:00", "    :  :     :  :  ", "garbage"])
+def test_malformed_capture_time_is_none(tmp_path: Path, when: str) -> None:
+    assert hash_of(photo(1), tmp_path, "a.jpg", exif=taken_at(when)).taken is None
+
+
+def test_image_without_exif_has_no_capture_time_and_no_sketch(original: Any) -> None:
+    _, h = original
+    assert h.taken is None and h.sketch == b"" and h.sketch_pixels() is None
+
+
+def test_image_with_a_capture_time_has_a_sketch_of_its_working_copy(tmp_path: Path) -> None:
+    path = save(photo(1), tmp_path / "a.jpg", exif=taken_at("2011:05:01 06:08:58"))
+    sketch = perceptual.perceptual_hash(path).sketch_pixels()
+    work = perceptual.working_copy(path).astype(float)
+    assert sketch is not None and sketch.shape == (32, 32)
+    halved = work.reshape(32, 2, 32, 2).mean(axis=(1, 3))
+    assert abs(sketch.astype(float) - halved).max() <= 0.5
+
+
+def test_flat_image_with_a_capture_time_has_no_sketch(tmp_path: Path) -> None:
+    flat = Image.new("RGB", (64, 64), "gray")
+    h = hash_of(flat, tmp_path, "f.jpg", exif=taken_at("2011:05:01 06:08:58"))
+    assert not h.usable and h.sketch == b""
 
 
 def test_cache_stamp_names_the_algorithm_and_both_library_versions() -> None:

@@ -6,7 +6,8 @@ Pick a folder. Dedupe scans it, groups files whose contents are byte-for-byte id
 which copy to keep, and moves the rest to the Trash after you confirm. A second tool lists hidden
 and temporary files (`.cache`, `~$report.docx`, `notes.txt~`, `*.swp`, `.DS_Store` ...). Images are
 compared side by side. Optionally, it also finds images that are *almost* the same (resized,
-re-compressed, converted, rotated or mirrored copies); see [Similar images](#similar-images).
+re-compressed, converted, rotated or mirrored copies, and shots of the same scene taken seconds
+apart); see [Similar images](#similar-images).
 
 > Screenshots: _placeholders, to be added under `docs/screenshots/`_
 >
@@ -164,14 +165,22 @@ the same size:
    [`imagehash`](https://github.com/JohannesBuchner/imagehash)) are computed for the image and for
    its 8 rotations and mirror images, so a copy rotated 90 degrees with no EXIF tag, or mirrored,
    still matches. Flat images (a solid colour) are excluded: their hash would match everything.
-   Hashes are cached next to the file hashes, keyed on the same stat fields plus the installed
-   `imagehash` and Pillow versions, so an upgrade recomputes instead of mixing hash values.
+   The EXIF capture time is read too, and an image that has one also keeps a 32x32 *sketch* of
+   its grayscale copy (1 KiB). Hashes and sketches are cached next to the file hashes, keyed on
+   the same stat fields plus the installed `imagehash` and Pillow versions, so an upgrade
+   recomputes instead of mixing hash values.
 4. **Candidates.** Every pair is compared by Hamming distance (the number of differing bits out of
    64), by brute force in numpy. A pair is a candidate when both its pHash and its dHash are within
-   the bound for one of the variants.
-5. **Verify.** A pair within the threshold on both hashes is accepted. A pair a little further out
-   (up to 12 bits, or the threshold if larger) is accepted only when the SSIM of the two 64x64
-   copies is at least 0.90. Strict is 4 bits, Normal 8, Loose 12.
+   the bound for one of the variants. Shots **taken at most 60 seconds apart** (EXIF capture time)
+   are candidates too, whatever their hashes say, each with at most its next 6 shots: when the
+   camera moves a little between two shots of the same scene the picture shifts, and a 5% shift
+   already moves pHash and dHash 15-25 bits, as far as two unrelated photos.
+5. **Verify.** A pair within the threshold on both hashes is accepted. Any other candidate is
+   first **aligned**: phase correlation finds the shift (up to 16% of the side) that lines the two
+   images up, and SSIM is computed on the part they share. A pair a little further out on the
+   hashes (up to 12 bits, or the threshold if larger) needs an SSIM of at least 0.90 on the 64x64
+   copies; shots taken seconds apart need 0.80 on their cached sketches, so verifying them never
+   decodes an image. Strict is 4 bits, Normal 8, Loose 12.
 6. **Cluster** with leader clustering, not connected components: A~B and B~C never put A and C in one
    group when they look nothing alike. Every member matches its group's leader, the output does not
    depend on the order files were found in, and the leader is the best image: highest resolution,
@@ -183,10 +192,13 @@ What it does **not** find, deliberately:
 |---|---|
 | Heavy crops (a small part of the picture) | the global hash changes completely; `imagehash.crop_resistant_hash` is a possible follow-up, but it is much slower and needs its own matching |
 | Watermarks and text overlays | they move enough hash bits and SSIM |
-| The same scene in a different shot (bursts, another angle) | not "the same image"; that needs AI image embeddings |
+| The same scene from another angle, or zoomed | only a shift is aligned, not a change of perspective or scale; that needs AI image embeddings |
+| Shots of the same scene without a capture time, or minutes apart | without EXIF time, only the hashes can bring two images together, and they are not shift tolerant |
 
 Measured on generated images (6 cores): 10,000 images take about 35 s the first time and 2 s from
-the cache; 50,000 take about 3 minutes and 30 s. See `tasks/plan.md`.
+the cache; 50,000 take about 3 minutes and 30 s. Capture times add work only for photos shot close
+together: in the worst case (2,000 photos, each 5 s after the last, so every photo has 6 neighbours
+to check) the first scan takes 12.5 s and the cached rescan 5 s. See `tasks/plan.md`.
 
 ## Safety guarantees
 
