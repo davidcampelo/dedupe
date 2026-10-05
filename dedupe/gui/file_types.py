@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import PurePath
 
+from dedupe.core.imaging import IMAGE_EXTENSIONS as _IMAGE_EXTENSIONS
+
 IMAGES = "Images"
 VIDEO = "Video"
 AUDIO = "Audio"
@@ -14,28 +16,7 @@ OTHER = "Other"
 CATEGORIES = (IMAGES, VIDEO, AUDIO, DOCUMENTS, ARCHIVES, OTHER)
 
 _EXTENSIONS: dict[str, frozenset[str]] = {
-    IMAGES: frozenset(
-        {
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".webp",
-            ".bmp",
-            ".tif",
-            ".tiff",
-            ".heic",
-            ".heif",
-            ".avif",
-            ".svg",
-            ".ico",
-            ".raw",
-            ".cr2",
-            ".nef",
-            ".arw",
-            ".dng",
-        }
-    ),
+    IMAGES: _IMAGE_EXTENSIONS,
     VIDEO: frozenset(
         {".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ".3gp"}
     ),
@@ -81,7 +62,7 @@ _EXTENSIONS: dict[str, frozenset[str]] = {
 }
 _BY_EXTENSION = {ext: cat for cat, exts in _EXTENSIONS.items() for ext in exts}
 
-IMAGE_EXTENSIONS = _EXTENSIONS[IMAGES]
+IMAGE_EXTENSIONS = _IMAGE_EXTENSIONS
 
 
 def classify(path: PurePath | str) -> str:

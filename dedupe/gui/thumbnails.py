@@ -19,20 +19,14 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from PIL import Image, ImageOps
+from PIL import Image
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
 
 from dedupe.core import paths
+from dedupe.core.imaging import load_image, safe_exif
 from dedupe.core.models import CancelToken, ProgressCallback
 from dedupe.gui.workers import Job, JobRunner
-
-try:  # optional HEIC/HEIF support
-    import pillow_heif
-
-    pillow_heif.register_heif_opener()
-except ImportError:  # pragma: no cover - depends on the environment
-    pass
 
 THUMB_SIZE = 192
 PREVIEW_SIZE = 1600
@@ -65,11 +59,15 @@ def cache_key(path: Path, size: int, mtime_ns: int) -> str:
 
 def _read_info(img: Image.Image) -> ImageInfo:
     width, height = img.size
+    exif = safe_exif(img)
+    if exif.get(274) in (5, 6, 7, 8):  # rotated by EXIF: report the displayed size
+        width, height = height, width
+    return _info_from_exif(width, height, exif)
+
+
+def _info_from_exif(width: int, height: int, exif: Image.Exif) -> ImageInfo:
     date = ""
     try:
-        exif = img.getexif()
-        if exif.get(274) in (5, 6, 7, 8):  # rotated by EXIF: report the displayed size
-            width, height = height, width
         sub = exif.get_ifd(0x8769) if hasattr(exif, "get_ifd") else {}
         for tag in EXIF_DATE_TAGS:
             value = sub.get(tag) or exif.get(tag)
@@ -98,13 +96,8 @@ def _to_qimage(img: Image.Image) -> QImage:
 
 def decode_image(path: Path, size: int) -> tuple[Image.Image, ImageInfo]:
     """Open, orient and shrink an image. Raises on corrupt or unsupported files."""
-    with Image.open(path) as img:
-        info = _read_info(img)
-        img.draft("RGB", (size * 2, size * 2))  # fast JPEG downscale while decoding
-        oriented = ImageOps.exif_transpose(img)
-        oriented.thumbnail((size, size))
-        oriented.load()
-        return oriented.copy(), info
+    loaded = load_image(path, size)
+    return loaded.image, _info_from_exif(loaded.width, loaded.height, loaded.exif)
 
 
 def freedesktop_path(path: Path, size: int) -> Path:
