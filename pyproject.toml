@@ -27,6 +27,8 @@ dev = [
   "hypothesis>=6",
   "ruff>=0.5",
   "mypy>=1.10",
+  "build>=1.0",
+  "hatchling>=1.20",
 ]
 
 [project.scripts]
@@ -37,6 +39,10 @@ dedupe-gui = "dedupe.gui.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["dedupe"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"data/io.github.davidcampelo.Dedupe.desktop" = "share/applications/io.github.davidcampelo.Dedupe.desktop"
+"data/icons" = "share/icons"
 
 [tool.hatch.build.targets.sdist]
 include = ["dedupe", "data", "README.md"]

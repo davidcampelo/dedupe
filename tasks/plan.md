@@ -135,7 +135,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 **Checkpoint D:** every spec §7 feature works by hand; keyboard navigation works; the 100k-file watchdog run passes with every tab populated.
 
 ### Phase 5: Ship
-- [ ] T20: Packaging: `.desktop`, hicolor icons, `pipx install .`, AppImage script (extends the full gate)
+- [x] T20: Packaging: `.desktop`, hicolor icons, `pipx install .`, AppImage script (extends the full gate)
 - [ ] T21: README + acceptance pass against spec §10
 
 **Checkpoint E:** every spec §10 acceptance criterion is met, verified from a clean `pipx install` and from the AppImage.

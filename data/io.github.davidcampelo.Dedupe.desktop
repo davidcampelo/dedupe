@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Dedupe
+GenericName=Duplicate File Finder
+Comment=Find duplicate files and clean up hidden and temporary files, safely
+Exec=dedupe-gui
+Icon=io.github.davidcampelo.Dedupe
+Terminal=false
+StartupNotify=true
+Categories=Utility;FileTools;Qt;
+Keywords=duplicate;duplicates;dedupe;cleanup;files;images;trash;

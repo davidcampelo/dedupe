@@ -353,14 +353,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 ## Phase 5: Ship
 
-### Task 20: Packaging
+### Task 20: Packaging ✅
 
 **Description:** `data/io.github.davidcampelo.Dedupe.desktop`, plus hicolor icons (scalable, symbolic, and PNGs at 16–256 rendered from the SVG) shipped as package data. `scripts/build_appimage.sh` fails loudly on any missing input and checks the **built artifact** (`--version` run from the AppImage). The full gate in `check.sh` gains `desktop-file-validate`.
 
 **Acceptance criteria:**
-- [ ] `pipx install .` in a clean venv provides working `dedupe` and `dedupe-gui` commands
-- [ ] `desktop-file-validate` passes as part of `scripts/check.sh`
-- [ ] The AppImage builds in the devcontainer and `--version` runs from it
+- [x] `pipx install .` in a clean venv provides working `dedupe` and `dedupe-gui` commands (verified with a throwaway `PIPX_HOME`: `dedupe --version`, `dedupe scan`, and `python -m dedupe --self-test` ran from the pipx venv)
+- [x] `desktop-file-validate` passes as part of `scripts/check.sh`
+- [x] The AppImage builds in the devcontainer and `--version` runs from it
 
 **Dependencies:** T11, T19
 

@@ -29,5 +29,11 @@ if [[ $mode == fast ]]; then
   echo "== pytest (fast)";   pytest -q -x -m "not slow"
 else
   echo "== pytest (full)";   pytest -q --cov=dedupe.core --cov-report=term-missing:skip-covered --cov-fail-under=90
+  command -v desktop-file-validate >/dev/null || {
+    echo "check: 'desktop-file-validate' not found; install desktop-file-utils" >&2; exit 1; }
+  shopt -s nullglob
+  desktop_files=(data/*.desktop)
+  [[ ${#desktop_files[@]} -gt 0 ]] || { echo "check: no data/*.desktop file to validate" >&2; exit 1; }
+  echo "== desktop-file-validate"; desktop-file-validate "${desktop_files[@]}"
 fi
 echo "check: $mode gate passed."
