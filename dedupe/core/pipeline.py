@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dedupe.core.cache import HashCache
 from dedupe.core.grouper import group_duplicates
 from dedupe.core.hasher import HashService, HashStore
 from dedupe.core.models import (
@@ -39,8 +40,13 @@ def run_scan(
         outcome = group_duplicates(entries, hashes, cancel, progress, options.paranoid)
     except CancelledError:
         return ScanResult(root, files_scanned=scanned, skipped=tuple(skipped), cancelled=True)
+    warnings: tuple[str, ...] = ()
+    if isinstance(store, HashCache):
+        store.flush()
+        warnings = tuple(store.warnings)
     return ScanResult(
         root=root,
+        warnings=warnings,
         groups=outcome.groups,
         empty_files=outcome.empty_files,
         hardlink_sets=outcome.hardlink_sets,

@@ -77,3 +77,15 @@ def test_sigint_exits_cleanly(make_tree: MakeTree) -> None:
     _, err = proc.communicate(timeout=10)
     assert proc.returncode in (130, 0)  # 0 if the scan finished first
     assert "Traceback" not in err
+
+
+def test_cache_used_and_cleared(make_tree: MakeTree, capsys: pytest.CaptureFixture[str]) -> None:
+    root = make_tree({"a": "dup", "b": "dup"})
+    assert main(["scan", str(root), "--json"]) == 0
+    capsys.readouterr()
+    assert main(["cache", "clear"]) == 0
+    assert "cleared 2 cached hashes" in capsys.readouterr().out
+    assert main(["scan", str(root), "--json", "--no-cache"]) == 0
+    capsys.readouterr()
+    assert main(["cache", "clear"]) == 0
+    assert "cleared 0 cached hashes" in capsys.readouterr().out

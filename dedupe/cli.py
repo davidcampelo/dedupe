@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from dedupe import __version__
+from dedupe.core.cache import HashCache
 from dedupe.core.models import CancelToken, Progress, ScanOptions, ScanResult
 from dedupe.core.pipeline import run_scan
 
@@ -29,7 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--paranoid", action="store_true", help="byte-compare within each group")
     scan.add_argument("--follow-symlinks", action="store_true")
     scan.add_argument("--cross-filesystems", action="store_true")
+    scan.add_argument("--no-cache", action="store_true", help="do not read or write the hash cache")
     scan.add_argument("--no-hidden", action="store_true", help="skip hidden files")
+    cache = sub.add_parser("cache", help="manage the hash cache")
+    cache_sub = cache.add_subparsers(dest="cache_command", required=True)
+    cache_sub.add_parser("clear", help="forget every cached hash")
     return parser
 
 
@@ -105,6 +110,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         follow_symlinks=args.follow_symlinks,
         cross_filesystems=args.cross_filesystems,
         include_hidden=not args.no_hidden,
+        use_cache=not args.no_cache,
     )
     cancel = CancelToken()
     previous = signal.signal(signal.SIGINT, lambda *_: cancel.cancel())
@@ -113,12 +119,17 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         if sys.stderr.isatty():
             print(f"\r{p.stage.value}: {p.done}/{p.total}  ", end="", file=sys.stderr, flush=True)
 
+    cache = HashCache() if options.use_cache else None
     try:
-        result = run_scan(root, options, on_progress, cancel)
+        result = run_scan(root, options, on_progress, cancel, cache)
     finally:
+        if cache is not None:
+            cache.close()
         signal.signal(signal.SIGINT, previous)
         if sys.stderr.isatty():
             print("\r" + " " * 40 + "\r", end="", file=sys.stderr)
+    for warning in result.warnings:
+        print(f"dedupe: warning: {warning}", file=sys.stderr)
     if result.cancelled:
         print("dedupe: cancelled", file=sys.stderr)
         return 130
@@ -136,6 +147,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "scan":
             return _cmd_scan(args)
+        if args.command == "cache":
+            cache = HashCache()
+            try:
+                print(f"cleared {cache.clear()} cached hashes")
+            finally:
+                cache.close()
+            return 0
         parser.print_help()
     except BrokenPipeError:  # e.g. `dedupe scan . | head`
         sys.stderr.close()

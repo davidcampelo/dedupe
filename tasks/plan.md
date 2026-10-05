@@ -107,7 +107,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 **Checkpoint A:** `dedupe scan` gives correct groups on fixtures and on `/files`; the full gate passes.
 
 ### Phase 2: Complete the core
-- [ ] T5: SQLite hash cache + clear cache
+- [x] T5: SQLite hash cache + clear cache
 - [ ] T6: Recommender + bulk-rule helpers
 - [ ] T7: Hidden/temp detector + `dedupe hidden` CLI
 - [ ] T8: Settings (TOML, XDG paths, validation)

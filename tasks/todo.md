@@ -97,14 +97,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 ## Phase 2: Complete the core
 
-### Task 5: Hash cache
+### Task 5: Hash cache ✅
 
 **Description:** `core/cache.py`: SQLite at `$XDG_CACHE_HOME/dedupe/hashes.db` (WAL), keyed on `(path, size, mtime_ns, inode, device)`. A single writer thread does batched commits. Provides `clear()`, the `--no-cache` flag and `dedupe cache clear`.
 
 **Acceptance criteria:**
-- [ ] A second scan reads zero bytes for unchanged files (hash-call counter)
-- [ ] Changing the content, mtime or inode invalidates only that entry
-- [ ] A corrupt or locked DB degrades to no-cache with a warning and the scan still succeeds
+- [x] A second scan reads zero bytes for unchanged files (hash-call counter)
+- [x] Changing the content, mtime or inode invalidates only that entry
+- [x] A corrupt or locked DB degrades to no-cache with a warning and the scan still succeeds
 
 **Dependencies:** T3
 
