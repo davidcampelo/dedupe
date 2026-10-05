@@ -43,14 +43,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 2: Scanner
+### Task 2: Scanner ✅
 
 **Description:** `core/scanner.py`: an iterative `os.scandir` walk using an explicit stack that yields `FileEntry` (path, size, mtime_ns, inode, device, mode). Symlink following is opt-in, with `(dev, inode)` loop protection. It stays on one filesystem by default and applies glob and folder exclusions, min size and the hidden-files option. Unreadable or vanished entries become `SkippedEntry(path, reason)`. It reports progress and checks the `CancelToken` on every entry.
 
 **Acceptance criteria:**
-- [ ] Symlinks are skipped by default; with following enabled, a symlink loop terminates
-- [ ] A `chmod 000` dir/file lands in `skipped` with a reason and the scan continues (skipped when running as root)
-- [ ] Exclusions and min size are respected; cancelling mid-walk returns within 100 ms
+- [x] Symlinks are skipped by default; with following enabled, a symlink loop terminates
+- [x] A `chmod 000` dir/file lands in `skipped` with a reason and the scan continues (skipped when running as root)
+- [x] Exclusions and min size are respected; cancelling mid-walk returns within 100 ms
 
 **Dependencies:** T1
 
