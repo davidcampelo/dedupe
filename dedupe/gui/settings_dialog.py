@@ -23,7 +23,13 @@ from PySide6.QtWidgets import (
 )
 
 from dedupe.core.cache import HashCache
-from dedupe.core.models import CancelToken, DeleteMode, ProgressCallback
+from dedupe.core.models import (
+    SIMILARITY_PRESETS,
+    CancelToken,
+    DeleteMode,
+    ProgressCallback,
+)
+from dedupe.core.perceptual import similar_available
 from dedupe.core.settings import Settings
 from dedupe.gui.workers import Job, JobRunner
 
@@ -49,6 +55,7 @@ class SettingsDialog(QDialog):
         runner: JobRunner | None = None,
         clear_cache_fn: Callable[[], int] = clear_default_cache,
         parent: QWidget | None = None,
+        similar_available_fn: Callable[[], bool] = similar_available,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -90,6 +97,26 @@ class SettingsDialog(QDialog):
         for mode, label in MODE_LABELS.items():
             self.delete_mode.addItem(label, mode.value)
         self.delete_mode.setCurrentIndex(self.delete_mode.findData(settings.default_delete_mode))
+        self.similar_images = QCheckBox("Find similar images (slower: every image is decoded)")
+        self.similar_images.setChecked(settings.similar_images)
+        self.similarity = QComboBox()
+        for name, bits in SIMILARITY_PRESETS.items():
+            self.similarity.addItem(f"{name.capitalize()} ({bits} bits)", bits)
+        if self.similarity.findData(settings.similarity_threshold) < 0:  # set by hand in the file
+            self.similarity.addItem(
+                f"Custom ({settings.similarity_threshold} bits)", settings.similarity_threshold
+            )
+        self.similarity.setCurrentIndex(self.similarity.findData(settings.similarity_threshold))
+        self.similarity.setToolTip(
+            "How different two images may be and still count as similar. Strict finds only "
+            "near-identical copies; Loose also finds heavier edits (and more false matches)."
+        )
+        self.similar_available = similar_available_fn()
+        self.similar_hint = QLabel("")
+        if not self.similar_available:
+            self.similar_images.setEnabled(False)
+            self.similarity.setEnabled(False)
+            self.similar_hint.setText("Install the optional extra to enable this: dedupe[similar]")
         self.clear_cache = QPushButton("Clear hash cache")
         self.clear_cache_status = QLabel("")
 
@@ -113,6 +140,9 @@ class SettingsDialog(QDialog):
         form.addRow(self.include_hidden)
         form.addRow(self.paranoid)
         form.addRow(self.use_cache)
+        form.addRow(self.similar_images)
+        form.addRow("Similarity", self.similarity)
+        form.addRow("", self.similar_hint)
         form.addRow("Cache", cache_row)
 
         self.buttons = QDialogButtonBox(
@@ -137,8 +167,15 @@ class SettingsDialog(QDialog):
         protected = tuple(
             self.protected_list.item(i).text() for i in range(self.protected_list.count())
         )
+        similar_images = self._base.similar_images
+        threshold = self._base.similarity_threshold
+        if self.similar_available:  # otherwise the controls are disabled: keep the file's values
+            similar_images = self.similar_images.isChecked()
+            threshold = int(self.similarity.currentData())
         return replace(
             self._base,
+            similar_images=similar_images,
+            similarity_threshold=threshold,
             exclude=patterns,
             protected_folders=protected,
             min_size=self.min_size.value(),

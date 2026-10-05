@@ -388,3 +388,38 @@ def test_keyboard_walkthrough_of_the_hidden_tab(qtbot: QtBot, tmp_path: Path) ->
     tab.model.select_none()
     with qtbot.assertNotEmitted(tab.delete_requested):
         QTest.keyClick(tab.view, Qt.Key.Key_Delete)
+
+
+# -- similar images -------------------------------------------------------------------------------
+
+
+def test_dialog_has_a_similar_checkbox_and_a_strict_normal_loose_combo(qtbot: QtBot) -> None:
+    d = dialog_for(qtbot, Settings(), similar_available_fn=lambda: True)
+    assert d.similar_images.isEnabled() and not d.similar_images.isChecked()
+    assert [d.similarity.itemText(i).split()[0] for i in range(d.similarity.count())] == [
+        "Strict",
+        "Normal",
+        "Loose",
+    ]
+    assert d.similarity.currentData() == 8
+    d.similar_images.setChecked(True)
+    d.similarity.setCurrentIndex(d.similarity.findData(12))
+    out = d.result_settings()
+    assert out.similar_images is True and out.similarity_threshold == 12
+
+
+def test_dialog_keeps_a_hand_edited_threshold_as_a_custom_choice(qtbot: QtBot) -> None:
+    s = replace(Settings(), similar_images=True, similarity_threshold=6)
+    d = dialog_for(qtbot, s, similar_available_fn=lambda: True)
+    assert d.similarity.currentText() == "Custom (6 bits)"
+    assert d.result_settings() == s
+
+
+def test_without_the_extra_the_controls_are_disabled_with_a_hint_and_values_are_kept(
+    qtbot: QtBot,
+) -> None:
+    s = replace(Settings(), similar_images=True, similarity_threshold=12)
+    d = dialog_for(qtbot, s, similar_available_fn=lambda: False)
+    assert not d.similar_images.isEnabled() and not d.similarity.isEnabled()
+    assert "dedupe[similar]" in d.similar_hint.text()
+    assert d.result_settings() == s

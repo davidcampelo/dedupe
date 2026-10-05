@@ -15,7 +15,12 @@ from typing import Any
 import tomli_w
 
 from dedupe.core import paths
-from dedupe.core.models import DEFAULT_EXCLUDES, DeleteMode, ScanOptions
+from dedupe.core.models import (
+    DEFAULT_EXCLUDES,
+    MAX_SIMILARITY_THRESHOLD,
+    DeleteMode,
+    ScanOptions,
+)
 
 __all__ = [
     "LoadedSettings",
@@ -42,6 +47,8 @@ class Settings:
     workers: int = 0  # 0 = automatic: min(4, cpu_count)
     default_delete_mode: str = DeleteMode.TRASH.value
     use_cache: bool = True
+    similar_images: bool = False  # also find near-identical images (needs dedupe[similar])
+    similarity_threshold: int = 8  # differing bits out of 64: strict 4, normal 8, loose 12
 
     def to_scan_options(self) -> ScanOptions:
         return ScanOptions(
@@ -54,6 +61,8 @@ class Settings:
             workers=self.workers,
             use_cache=self.use_cache,
             protected_folders=self.protected_folders,
+            similar_images=self.similar_images,
+            similarity_threshold=self.similarity_threshold,
         )
 
     def with_protected_folder(self, folder: str) -> Settings:
@@ -85,6 +94,10 @@ def _validate(key: str, value: Any, default: Any) -> Any:
             raise SettingsError(f"{where} must not be negative, got {value}")
         if key == "workers" and value > 64:
             raise SettingsError(f"{where} must be at most 64, got {value}")
+        if key == "similarity_threshold" and value > MAX_SIMILARITY_THRESHOLD:
+            raise SettingsError(
+                f"{where} must be between 0 and {MAX_SIMILARITY_THRESHOLD}, got {value}"
+            )
         return value
     if isinstance(default, tuple):
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):

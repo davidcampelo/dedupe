@@ -226,9 +226,9 @@ The similar chain inside `run_scan`; `SimilarGroup` and `SimilarMember`; the qua
 
 ### Phase S2: GUI
 
-#### Task S8: Settings
-- [ ] `similar_images` and `similarity_threshold` are validated: a threshold outside 0–16 is rejected, and a bool is rejected where an int is expected
-- [ ] The dialog has a checkbox and the Strict/Normal/Loose combo box; when `imagehash` is missing the controls are disabled with "install dedupe[similar]"
+#### Task S8: Settings ✅
+- [x] `similar_images` and `similarity_threshold` are validated: a threshold outside 0–16 is rejected, and a bool is rejected where an int is expected
+- [x] The dialog has a checkbox and the Strict/Normal/Loose combo box; when `imagehash` is missing the controls are disabled with "install dedupe[similar]"
 
 **Scope:** S
 

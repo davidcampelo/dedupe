@@ -123,3 +123,41 @@ def test_trash_is_the_default_delete_mode() -> None:
     """Spec section 10: Trash is the default. Nothing else may become the default silently."""
     assert Settings().default_delete_mode == "trash"
     assert load_settings(Path("/nonexistent/settings.toml")).settings.default_delete_mode == "trash"
+
+
+# -- similar images -----------------------------------------------------------------------------
+
+
+def test_similar_defaults_are_off_and_normal() -> None:
+    s = Settings()
+    assert s.similar_images is False and s.similarity_threshold == 8
+    opts = s.to_scan_options()
+    assert (opts.similar_images, opts.similarity_threshold) == (False, 8)
+
+
+def test_similar_settings_round_trip(tmp_path: Path) -> None:
+    s = replace(Settings(), similar_images=True, similarity_threshold=0)
+    assert load_settings(save_settings(s, tmp_path / "s.toml")).settings == s
+    assert s.to_scan_options().similarity_threshold == 0  # zero is a real value
+
+
+@pytest.mark.parametrize("value", ["17", "-1", "true", "false", "8.5", '"normal"'])
+def test_bad_similarity_threshold_is_rejected_naming_the_key(tmp_path: Path, value: str) -> None:
+    with pytest.raises(SettingsError, match="similarity_threshold"):
+        load_settings(write(tmp_path, f"similarity_threshold = {value}\n"))
+
+
+def test_similar_images_must_be_a_bool(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError, match="similar_images"):
+        load_settings(write(tmp_path, "similar_images = 1\n"))
+
+
+def test_threshold_bounds_are_accepted(tmp_path: Path) -> None:
+    assert (
+        load_settings(write(tmp_path, "similarity_threshold = 16\n")).settings.similarity_threshold
+        == 16
+    )
+    assert (
+        load_settings(write(tmp_path, "similarity_threshold = 0\n")).settings.similarity_threshold
+        == 0
+    )
