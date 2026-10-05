@@ -4,14 +4,30 @@ QThreadPool that owns a CancelToken and reports through queued signals."""
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
+from dedupe.core.actions import (
+    ActionPlan,
+    ActionSummary,
+    PlanRefused,
+    TrashFn,
+    execute,
+    plan_actions,
+)
 from dedupe.core.cache import HashCache
-from dedupe.core.models import CancelToken, Progress, ProgressCallback, ScanOptions
+from dedupe.core.models import (
+    CancelToken,
+    DeleteMode,
+    DuplicateGroup,
+    Progress,
+    ProgressCallback,
+    ScanOptions,
+)
 from dedupe.core.pipeline import run_scan
 from dedupe.gui.gcutil import freeze, gc_paused
 
@@ -74,6 +90,68 @@ class ScanJob(Job):
 
         super().__init__(work)
         self.root = root
+
+
+@dataclass(frozen=True, slots=True)
+class PlanOutcome:
+    plan: ActionPlan | None
+    refused: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ActionOutcome:
+    summary: ActionSummary | None
+    refused: tuple[str, ...] = ()
+    error: str = ""
+
+
+class PlanJob(Job):
+    """Plans a deletion off the GUI thread. A refusal is a normal result, not an exception."""
+
+    def __init__(
+        self,
+        groups: list[DuplicateGroup],
+        selection: Iterable[Path],
+        protected_folders: Iterable[str] = (),
+    ) -> None:
+        selection = set(selection)
+        protected = tuple(protected_folders)
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> PlanOutcome:
+            try:
+                plan = plan_actions(groups, selection, DeleteMode.TRASH, protected)
+            except PlanRefused as e:
+                return PlanOutcome(None, tuple(e.reasons))
+            return PlanOutcome(plan)
+
+        super().__init__(work)
+
+
+class ActionJob(Job):
+    """Plans (again, for the chosen mode) and executes a deletion, with per-file progress."""
+
+    def __init__(
+        self,
+        groups: list[DuplicateGroup],
+        selection: Iterable[Path],
+        mode: DeleteMode,
+        dry_run: bool,
+        protected_folders: Iterable[str] = (),
+        trash: TrashFn | None = None,
+        log_path: Path | None = None,
+    ) -> None:
+        selection = set(selection)
+        protected = tuple(protected_folders)
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> ActionOutcome:
+            try:
+                plan = plan_actions(groups, selection, mode, protected)
+            except PlanRefused as e:
+                return ActionOutcome(None, tuple(e.reasons))
+            summary = execute(plan, dry_run, progress, cancel, log_path, trash)
+            return ActionOutcome(summary)
+
+        super().__init__(work)
 
 
 class JobRunner:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterable, Sequence
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -109,6 +110,7 @@ class DuplicatesModel(QAbstractTableModel):
         self._pending: list[DuplicateGroup] = []
         self._pending_pos = 0
         self._protected: tuple[str, ...] = ()
+        self._overrides: dict[Path, bool] = {}
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(0)
@@ -125,10 +127,15 @@ class DuplicatesModel(QAbstractTableModel):
     # -- loading -------------------------------------------------------------------------
 
     def set_groups(
-        self, groups: Sequence[DuplicateGroup], protected_folders: Iterable[str] = ()
+        self,
+        groups: Sequence[DuplicateGroup],
+        protected_folders: Iterable[str] = (),
+        overrides: dict[Path, bool] | None = None,
     ) -> None:
-        """Replace the contents; rows arrive in batches (see ``load_finished``)."""
+        """Replace the contents; rows arrive in batches (see ``load_finished``).
+        ``overrides`` carries the user's explicit choices over a reload."""
         self._timer.stop()
+        self._overrides = overrides or {}
         self.beginResetModel()
         self._discard_nodes()
         self._groups = []
@@ -189,6 +196,7 @@ class DuplicatesModel(QAbstractTableModel):
             rec = recs.get(entry.path)
             f.recommended = rec is not None and rec.verdict is Verdict.DELETE
             f.reason = rec.reason if rec else ""
+            f.override = self._overrides.get(entry.path)
             f.protected = is_protected(entry.path, self._protected) if self._protected else False
             node.files.append(f)
             self._by_path[entry.path] = f
@@ -273,6 +281,28 @@ class DuplicatesModel(QAbstractTableModel):
     @property
     def file_count(self) -> int:
         return len(self._by_path)
+
+    def remove_paths(self, removed: set[Path]) -> None:
+        """Drop deleted files; a group left with fewer than two copies is no longer a duplicate
+        group. The user's other choices are kept."""
+        overrides = {
+            p: n.override
+            for p, n in self._by_path.items()
+            if n.override is not None and p not in removed
+        }
+        remaining: list[DuplicateGroup] = []
+        for g in self.groups():
+            if removed.isdisjoint(f.path for f in g.files):
+                remaining.append(g)
+                continue
+            files = tuple(f for f in g.files if f.path not in removed)
+            if len(files) >= 2:
+                recs = tuple(r for r in g.recommendations if r.path not in removed)
+                remaining.append(replace(g, files=files, recommendations=recs))
+        self.set_groups(remaining, self._protected, overrides)
+
+    def reclaimable(self) -> int:
+        return sum(g.group.reclaimable for g in self._groups)
 
     def select_all_suggested(self) -> None:
         """Reset every choice to the recommendation."""
@@ -548,6 +578,7 @@ class DuplicatesTab(QWidget):
         self.summary = QLabel("Scan a folder to find duplicates.")
         self.delete_button = QPushButton(icons.icon("move-to-trash"), "Delete selected…")
         self.delete_button.setEnabled(False)
+        self._busy = False
         bar = QHBoxLayout()
         bar.addWidget(self.summary, 1)
         bar.addWidget(self.delete_button)
@@ -564,13 +595,17 @@ class DuplicatesTab(QWidget):
     ) -> None:
         self.model.set_groups(groups, protected_folders)
 
+    def set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        self._refresh()
+
     def _maybe_delete(self) -> None:
-        if self.model.selected_count:
+        if self.model.selected_count and not self._busy:
             self.delete_requested.emit()
 
     def _refresh(self) -> None:
         m = self.model
-        self.delete_button.setEnabled(m.selected_count > 0 and not m.loading)
+        self.delete_button.setEnabled(m.selected_count > 0 and not m.loading and not self._busy)
         if m.group_count or m.loading:
             self.summary.setText(
                 f"{m.group_count} groups · {m.selected_count} files selected "

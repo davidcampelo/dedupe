@@ -244,14 +244,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 14: Delete confirmation flow
+### Task 14: Delete confirmation flow ✅
 
 **Description:** `gui/delete_dialog.py`: the Delete key or button opens a dialog with the count, total size, the first N paths and the mode: Trash (default), Permanent (enabled only once the **"I understand these files cannot be recovered" checkbox** is ticked) or Hardlink (only when the plan allows it), plus a Dry run toggle. Planning and execution run in an **`ActionJob`** with per-file progress and cancel. Planner refusals appear as a blocking message. A summary dialog follows, and the model drops the deleted rows.
 
 **Acceptance criteria:**
-- [ ] Rejecting the dialog leaves every file intact; nothing reaches `execute` without acceptance
-- [ ] In Permanent mode, OK stays disabled until the checkbox is ticked, and switching modes unticks it
-- [ ] Deleting 5k fixture files (Trash, with a stubbed backend) passes `ui_watchdog`; a dry run leaves the files on disk
+- [x] Rejecting the dialog leaves every file intact; nothing reaches `execute` without acceptance
+- [x] In Permanent mode, OK stays disabled until the checkbox is ticked, and switching modes unticks it
+- [x] Deleting 5k fixture files (Trash, with a stubbed backend) passes `ui_watchdog`; a dry run leaves the files on disk
 
 **Dependencies:** T10, T13
 
