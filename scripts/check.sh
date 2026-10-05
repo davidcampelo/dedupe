@@ -17,7 +17,15 @@ fi
 
 [[ -x .venv/bin/python ]] && PATH="$PWD/.venv/bin:$PATH"
 for tool in ruff mypy pytest; do
-  command -v "$tool" >/dev/null || { echo "check: '$tool' not found; run: pip install -e '.[dev]'" >&2; exit 1; }
+  command -v "$tool" >/dev/null && continue
+  echo "check: '$tool' not found; run: pip install -e '.[dev]'" >&2
+  # .venv is created by the devcontainer; its python links to the container's interpreter,
+  # so on the host the link dangles and none of its tools are usable.
+  if [[ -L .venv/bin/python && ! -e .venv/bin/python ]]; then
+    echo "check: .venv belongs to the devcontainer ($(readlink .venv/bin/python) does not exist here)." >&2
+    echo "check: run git commit/push from the devcontainer terminal, or activate a host venv with '.[dev]' installed." >&2
+  fi
+  exit 1
 done
 
 export QT_QPA_PLATFORM=offscreen
