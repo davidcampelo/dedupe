@@ -16,6 +16,9 @@ else
     pytest pytest-qt ruff mypy hatchling build
 fi
 
+# Quality gates: pre-commit runs scripts/check.sh --fast, pre-push runs the full gate.
+git config core.hooksPath .githooks
+
 echo
 echo "Ready. GUI: run 'xhost +local:' on the host, then 'python -m dedupe.gui'."
 echo "Headless tests: QT_QPA_PLATFORM=offscreen pytest   (or: xvfb-run pytest)"

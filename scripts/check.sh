@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# The single quality gate. Git hooks, Claude Code hooks and CI all run this script,
+# so "passes locally" and "passes in CI" mean the same thing.
+#
+#   scripts/check.sh          full gate: lint, format, types, every test, core coverage
+#   scripts/check.sh --fast   pre-commit gate: same checks, skips @pytest.mark.slow, no coverage
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+mode=full
+[[ "${1:-}" == "--fast" ]] && mode=fast
+
+if [[ ! -d dedupe ]]; then
+  echo "check: no dedupe/ package yet (Task 1 creates it); nothing to check."
+  exit 0
+fi
+
+[[ -x .venv/bin/python ]] && PATH="$PWD/.venv/bin:$PATH"
+for tool in ruff mypy pytest; do
+  command -v "$tool" >/dev/null || { echo "check: '$tool' not found; run: pip install -e '.[dev]'" >&2; exit 1; }
+done
+
+export QT_QPA_PLATFORM=offscreen
+
+echo "== ruff check";        ruff check .
+echo "== ruff format";       ruff format --check .
+echo "== mypy";              mypy
+if [[ $mode == fast ]]; then
+  echo "== pytest (fast)";   pytest -q -x -m "not slow"
+else
+  echo "== pytest (full)";   pytest -q --cov=dedupe.core --cov-report=term-missing:skip-covered --cov-fail-under=90
+fi
+echo "check: $mode gate passed."
