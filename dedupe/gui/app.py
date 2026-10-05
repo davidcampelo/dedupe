@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from dedupe.core.settings import SettingsError, load_settings
@@ -34,7 +35,7 @@ def main() -> int:
         settings, warnings = loaded.settings, loaded.warnings
     except SettingsError as e:
         settings, warnings = None, (f"settings ignored: {e}",)
-    window = MainWindow(settings)
+    window = MainWindow(settings, QSettings())
     for warning in warnings:
         window.statusBar().showMessage(warning, 10000)
     window.show()

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import random
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ from tests.gui.conftest import UiWatchdog
 pytestmark = pytest.mark.slow
 
 N_FILES = 100_000
+HIDDEN_FILES = 2_000
 
 
 @pytest.fixture(scope="module")
@@ -30,7 +33,25 @@ def big_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
         if i < 2000:
             d.mkdir(parents=True, exist_ok=True)
         (d / f"f{i}.bin").write_bytes(blobs[i // 2] if i % 2 == 0 else blobs[(i - 1) // 2])
+    # Extras so that every tab has something to show: hidden/temp files (unique content, so
+    # they are never duplicates) and a folder that cannot be read.
+    extra = root / "extras"
+    extra.mkdir()
+    for i in range(HIDDEN_FILES):
+        (extra / (f".hid{i}" if i % 2 == 0 else f"tmp{i}~")).write_bytes(
+            i.to_bytes(8, "little") + b"u"
+        )
+    locked = root / "locked"
+    locked.mkdir()
+    (locked / "f").write_bytes(b"x")
+    locked.chmod(0)
     return root
+
+
+@pytest.fixture(scope="module", autouse=True)
+def unlock_at_the_end(big_tree: Path) -> Iterator[None]:
+    yield
+    (big_tree / "locked").chmod(0o755)  # so pytest can clean the tree up
 
 
 def make_window(qtbot: QtBot) -> MainWindow:
@@ -82,3 +103,32 @@ def test_cancel_responds_within_a_second_on_100k_files(
         elapsed = time.monotonic() - start
     assert blocker.args[0].cancelled
     assert elapsed < 1.0, f"cancel took {elapsed:.2f}s"
+
+
+def test_every_tab_populated_at_100k_files_stays_responsive(
+    qtbot: QtBot, big_tree: Path, ui_watchdog: UiWatchdog
+) -> None:
+    w = make_window(qtbot)
+    w.set_folder(big_tree)
+    with ui_watchdog.watch():
+        with qtbot.waitSignal(w.scan_finished, timeout=300000):
+            w.start_scan()
+        qtbot.waitUntil(lambda: not w.duplicates_tab.model.loading, timeout=120000)
+        assert w.duplicates_tab.model.group_count == N_FILES // 2
+        assert w.hidden_tab.model.rowCount() == HIDDEN_FILES
+        assert w.hidden_tab.model.selected_count == HIDDEN_FILES // 2  # the "x~" files
+        if os.geteuid() != 0:
+            assert w.skipped_tab.model.rowCount() >= 1
+        for index in (1, 2, 0):  # visit every tab, as a user would
+            w.tabs.setCurrentIndex(index)
+            qtbot.wait(30)
+        tab = w.duplicates_tab
+        with qtbot.waitSignal(tab.view_changed, timeout=120000):
+            tab.filter_edit.setText("d007/")
+        qtbot.waitUntil(lambda: not tab.model.loading, timeout=120000)
+        assert 0 < tab.model.group_count < N_FILES // 2
+        with qtbot.waitSignal(tab.grid_changed, timeout=120000):
+            tab.grid_button.setChecked(True)
+        qtbot.wait(100)
+        tab.grid_button.setChecked(False)
+        qtbot.wait(50)

@@ -16,6 +16,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -178,6 +179,28 @@ class HiddenModel(QAbstractTableModel):
         return False
 
 
+class HiddenTableView(QTableView):
+    """Space toggles the selected rows, Delete asks to delete them."""
+
+    delete_requested = Signal()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        model = self.model()
+        if event.key() == Qt.Key.Key_Space and isinstance(model, HiddenModel):
+            rows = sorted({i.row() for i in self.selectionModel().selectedRows()})
+            if not rows and self.currentIndex().isValid():
+                rows = [self.currentIndex().row()]
+            target = not all(r in model._checked for r in rows)
+            for row in rows:
+                model.set_checked(row, target)
+            event.accept()
+        elif event.key() == Qt.Key.Key_Delete:
+            self.delete_requested.emit()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+
 class HiddenFilesTab(QWidget):
     delete_requested = Signal()
 
@@ -192,7 +215,7 @@ class HiddenFilesTab(QWidget):
         self.intro.setWordWrap(True)
         self.temp_patterns = QCheckBox("Also match *.swp, .DS_Store, Thumbs.db, desktop.ini, *.tmp")
         self.temp_patterns.setChecked(True)
-        self.view = QTableView()
+        self.view = HiddenTableView()
         self.view.setModel(self.model)
         self.view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.view.setShowGrid(False)
@@ -230,6 +253,7 @@ class HiddenFilesTab(QWidget):
         self.select_suggested_button.clicked.connect(self.model.select_suggested)
         self.select_none_button.clicked.connect(self.model.select_none)
         self.delete_button.clicked.connect(self.delete_requested)
+        self.view.delete_requested.connect(self._maybe_delete)
         self._refresh()
 
     def set_items(self, items: Sequence[HiddenItem]) -> None:
@@ -238,6 +262,18 @@ class HiddenFilesTab(QWidget):
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
         self._refresh()
+
+    def _maybe_delete(self) -> None:
+        if self.model.selected_count and not self._busy:
+            self.delete_requested.emit()
+
+    def refresh_icons(self) -> None:
+        self.delete_button.setIcon(icons.icon("move-to-trash"))
+        self.model.dataChanged.emit(
+            self.model.index(0, 0),
+            self.model.index(max(0, self.model.rowCount() - 1), 0),
+            [Qt.ItemDataRole.DecorationRole],
+        )
 
     def confirm_risky(self, item: HiddenItem) -> bool:
         """Extra confirmation for protected items and anything in a home dot-folder."""

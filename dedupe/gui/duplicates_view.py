@@ -366,6 +366,19 @@ class DuplicatesModel(QAbstractTableModel):
     def reclaimable(self) -> int:
         return sum(g.group.reclaimable for g in self._groups)
 
+    def refresh_icons(self) -> None:
+        self._badges = {
+            "keep": icons.icon("badge-keep"),
+            "delete": icons.icon("badge-delete"),
+            "protected": icons.icon("badge-protected"),
+        }
+        if self._rows:
+            self.dataChanged.emit(
+                self.index(0, COL_STATUS),
+                self.index(len(self._rows) - 1, COL_STATUS),
+                [Qt.ItemDataRole.DecorationRole],
+            )
+
     def live_overrides(self) -> dict[Path, bool]:
         return dict(self._live_overrides)
 
@@ -965,6 +978,11 @@ class DuplicatesTab(QWidget):
         job = Job(work)
         job.signals.finished.connect(self.model.apply_overrides)
         self.runner.start(job)
+
+    def refresh_icons(self) -> None:
+        self.delete_button.setIcon(icons.icon("move-to-trash"))
+        self.grid_button.setIcon(icons.icon("compare-images"))
+        self.model.refresh_icons()
 
     # -- grid mode ----------------------------------------------------------------------------
 

@@ -130,7 +130,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 - [x] T16: Hidden & Temp tab + Skipped/Errors tab
 - [x] T17: Thumbnail jobs + side-by-side image comparison + preview window
 - [x] T18: Thumbnail grid browse mode
-- [ ] T19: Settings dialog, persisted UI state, theme handling
+- [x] T19: Settings dialog, persisted UI state, theme handling
 
 **Checkpoint D:** every spec §7 feature works by hand; keyboard navigation works; the 100k-file watchdog run passes with every tab populated.
 

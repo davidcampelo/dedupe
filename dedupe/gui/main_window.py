@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent
+from PySide6.QtCore import QEvent, QSettings, Qt, Signal, Slot
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QDragEnterEvent,
+    QDropEvent,
+    QGuiApplication,
+    QKeySequence,
+    QPalette,
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -33,6 +42,7 @@ from dedupe.gui import icons
 from dedupe.gui.delete_dialog import DeleteChoice, DeleteDialog, format_summary
 from dedupe.gui.duplicates_view import DuplicatesTab
 from dedupe.gui.hidden_files_view import HiddenFilesTab
+from dedupe.gui.settings_dialog import SettingsDialog
 from dedupe.gui.skipped_view import SkippedTab
 from dedupe.gui.workers import (
     ActionJob,
@@ -51,6 +61,15 @@ MAX_RECENT = 10
 BYTE_STAGES = {Stage.PARTIAL, Stage.FULL, Stage.COMPARE}
 
 
+def _as_list(value: object) -> list[str]:
+    """QSettings returns a bare str for one-element lists and None when unset."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value]  # type: ignore[attr-defined]
+
+
 @dataclass(frozen=True, slots=True)
 class DeleteRequest:
     """What a deletion was asked for, kept while the plan is checked and the user confirms."""
@@ -67,9 +86,12 @@ class MainWindow(QMainWindow):
     scan_failed = Signal(str)
     action_finished = Signal(object)  # ActionSummary
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self, settings: Settings | None = None, ui_settings: QSettings | None = None
+    ) -> None:
         super().__init__()
         self.settings = settings or Settings()
+        self.ui_settings = ui_settings  # window state; None = do not persist (tests)
         self.runner = JobRunner()
         self.job: Job | None = None
         self.trash_backend: TrashFn | None = None  # tests inject a stub; None = send2trash
@@ -92,6 +114,7 @@ class MainWindow(QMainWindow):
         self.recent_combo.setPlaceholderText("No folder selected (drop one here)")
         self.scan_button = QPushButton(icons.icon("scan-folder"), "Scan")
         self.cancel_button = QPushButton(icons.icon("cancel-scan"), "Cancel")
+        self.settings_button = QPushButton(icons.icon("settings"), "Settings…")
         self.scan_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
 
@@ -100,6 +123,7 @@ class MainWindow(QMainWindow):
         top.addWidget(self.recent_combo, 1)
         top.addWidget(self.scan_button)
         top.addWidget(self.cancel_button)
+        top.addWidget(self.settings_button)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
@@ -138,10 +162,14 @@ class MainWindow(QMainWindow):
         self.duplicates_tab.source_changed.connect(self._update_totals)
         self.duplicates_tab.folder_protected.connect(self._on_folder_protected)
         self.hidden_tab.delete_requested.connect(self.request_hidden_delete)
+        self._install_shortcuts()
+        self._watch_theme()
+        self._restore_ui_state()
         self.choose_button.clicked.connect(self.choose_folder)
         self.recent_combo.activated.connect(self._on_recent_activated)
         self.scan_button.clicked.connect(self.start_scan)
         self.cancel_button.clicked.connect(self.cancel_scan)
+        self.settings_button.clicked.connect(self.open_settings)
         self.duplicates_tab.delete_requested.connect(self.request_delete)
 
     # -- folder selection ----------------------------------------------------------------
@@ -405,9 +433,124 @@ class MainWindow(QMainWindow):
         self.duplicates_tab.set_busy(busy)
         self.hidden_tab.set_busy(busy)
 
+    # -- settings -------------------------------------------------------------------------
+
+    def open_settings(self) -> None:
+        new = self.ask_settings()
+        if new is not None:
+            self.apply_settings(new)
+
+    def ask_settings(self) -> Settings | None:
+        """Show the settings dialog. Overridden in tests."""
+        dialog = SettingsDialog(self.settings, self.runner, parent=self)
+        return dialog.result_settings() if dialog.exec() == QDialog.DialogCode.Accepted else None
+
+    def apply_settings(self, new: Settings) -> None:
+        """Adopt new settings: saved in a job, applied from the next scan on."""
+        old, self.settings = self.settings, new
+        path = self.settings_path
+        job = Job(lambda cancel, progress: save_settings(new, path))
+        job.signals.failed.connect(
+            lambda msg: self.statusBar().showMessage(f"Could not save settings: {msg}", 10000)
+        )
+        self.runner.start(job)
+        if new.protected_folders != old.protected_folders:
+            self.duplicates_tab.set_protected(new.protected_folders)
+        self.statusBar().showMessage("Settings saved; they apply to the next scan", 5000)
+
+    # -- shortcuts, persisted state, theme -------------------------------------------------
+
+    def _install_shortcuts(self) -> None:
+        def add(keys: str, slot: Callable[[], None], name: str) -> None:
+            action = QAction(name, self)
+            action.setShortcut(QKeySequence(keys))
+            action.triggered.connect(slot)
+            self.addAction(action)
+
+        add("Ctrl+O", self.choose_folder, "Choose folder")
+        add("Ctrl+R", self.start_scan, "Scan")
+        add("F5", self.start_scan, "Scan")
+        add("Escape", self.cancel_scan, "Cancel")
+        add("Ctrl+,", self.open_settings, "Settings")
+        for n in range(3):
+            add(f"Ctrl+{n + 1}", partial(self.tabs.setCurrentIndex, n), f"Tab {n + 1}")
+        self.setTabOrder(self.choose_button, self.recent_combo)
+        self.setTabOrder(self.recent_combo, self.scan_button)
+        self.setTabOrder(self.scan_button, self.cancel_button)
+        self.setTabOrder(self.cancel_button, self.settings_button)
+        self.setTabOrder(self.settings_button, self.tabs)
+        self.scan_button.setAccessibleName("Scan the chosen folder")
+        self.choose_button.setAccessibleName("Choose a folder")
+
+    def _restore_ui_state(self) -> None:
+        ui = self.ui_settings
+        if ui is None:
+            return
+        geometry = ui.value("window/geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+        splitter = ui.value("duplicates/splitter")
+        if splitter:
+            self.duplicates_tab.splitter.restoreState(splitter)
+        recent = _as_list(ui.value("folders/recent"))
+        last = str(ui.value("folders/last", "") or "")
+        if recent:
+            self.recent = recent[:MAX_RECENT]
+        if last:
+            self.set_folder(Path(last))
+        elif self.recent:
+            self.set_folder(Path(self.recent[0]))
+
+    def _save_ui_state(self) -> None:
+        ui = self.ui_settings
+        if ui is None:
+            return
+        ui.setValue("window/geometry", self.saveGeometry())
+        ui.setValue("duplicates/splitter", self.duplicates_tab.splitter.saveState())
+        ui.setValue("folders/recent", self.recent)
+        ui.setValue("folders/last", str(self.folder) if self.folder else "")
+        ui.sync()
+
+    def refresh_icons(self) -> None:
+        """Recolour every icon for the current palette (called when the theme changes)."""
+        for button, name in (
+            (self.choose_button, "choose-folder"),
+            (self.scan_button, "scan-folder"),
+            (self.cancel_button, "cancel-scan"),
+            (self.settings_button, "settings"),
+        ):
+            button.setIcon(icons.icon(name))
+        for i, name in enumerate(("duplicates", "hidden-files", "skipped-error")):
+            self.tabs.setTabIcon(i, icons.icon(name))
+        self.duplicates_tab.refresh_icons()
+        self.hidden_tab.refresh_icons()
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self.refresh_icons()
+        return super().event(event)
+
+    def _watch_theme(self) -> None:
+        """Follow the application palette and the system colour scheme (widgets do not always
+        receive a palette event when only the application palette changes)."""
+        app = QGuiApplication.instance()
+        if isinstance(app, QGuiApplication):
+            # bound slots, so Qt disconnects them when this window is destroyed
+            app.paletteChanged.connect(self._on_palette_changed)
+            app.styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
+
+    @Slot(QPalette)
+    def _on_palette_changed(self, _palette: QPalette) -> None:
+        self.refresh_icons()
+
+    @Slot(Qt.ColorScheme)
+    def _on_color_scheme_changed(self, _scheme: Qt.ColorScheme) -> None:
+        self.refresh_icons()
+
     # -- lifecycle -----------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._save_ui_state()
         self.duplicates_tab.thumbnails.shutdown(1000)
         self.runner.shutdown(2000)
         super().closeEvent(event)

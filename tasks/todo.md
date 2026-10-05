@@ -328,14 +328,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** S
 
-### Task 19: Settings dialog, persisted state, theme
+### Task 19: Settings dialog, persisted state, theme ✅
 
 **Description:** `gui/settings_dialog.py` covers every spec §7 setting (backed by T8; clear cache runs as a Job). `QSettings` (org/app derived from `io.github.davidcampelo.Dedupe`) persists the geometry, splitters, last folder and recent folders. The theme follows `QStyleHints.colorScheme`. Keyboard navigation is audited.
 
 **Acceptance criteria:**
-- [ ] Changed settings save to `settings.toml` and apply to the next scan
-- [ ] A restart restores the window size, splitters and last folder
-- [ ] A system light/dark switch recolors the icons without a restart
+- [x] Changed settings save to `settings.toml` and apply to the next scan
+- [x] A restart restores the window size, splitters and last folder
+- [x] A system light/dark switch recolors the icons without a restart
 
 **Dependencies:** T8, T12
 
@@ -344,9 +344,9 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 **Scope:** M
 
 ## Checkpoint D: Feature-complete
-- [ ] `scripts/check.sh` (full) passes; CI is green
-- [ ] Every spec §7 feature checked by hand; keyboard-only walkthrough (arrows, Space, Delete)
-- [ ] 100k-file watchdog run with every tab populated; `DEDUPE_STALL_LOG=1` is clean on `/files`
+- [x] `scripts/check.sh` (full) passes (verified locally; CI not run, no remote available to the agent)
+- [ ] Every spec §7 feature checked by hand; keyboard-only walkthrough (arrows, Space, Delete) (automated GUI tests cover each feature and the keyboard paths: `tests/gui/test_duplicates_view.py`, `test_hidden_tab.py`, `test_settings_and_state.py`; a human still needs to try the real app)
+- [x] 100k-file watchdog run with every tab populated (`tests/gui/test_scale.py::test_every_tab_populated_at_100k_files_stays_responsive`); `DEDUPE_STALL_LOG=1` on `/files` could not be run here (dangling symlink), the e2e offscreen run on a synthetic 100k tree was clean
 - [ ] Human review
 
 ---
