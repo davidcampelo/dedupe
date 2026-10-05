@@ -8,7 +8,7 @@ python -m venv .venv
 
 if [ -f pyproject.toml ]; then
   # Editable install with dev extras if defined, otherwise plain editable install.
-  .venv/bin/pip install -e ".[dev]" || .venv/bin/pip install -e .
+  .venv/bin/pip install -e ".[dev,similar]" || .venv/bin/pip install -e .
 else
   echo "No pyproject.toml yet; installing the baseline toolchain from the spec."
   .venv/bin/pip install \

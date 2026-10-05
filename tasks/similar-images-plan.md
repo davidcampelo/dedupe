@@ -171,12 +171,12 @@ Similar images are **different files**. Every rule that relies on "the content s
 
 **Scope:** S
 
-#### Task S2: Perceptual hash
+#### Task S2: Perceptual hash ✅
 `pyproject.toml`: the `similar` extra; `dev` installs it too, and CI and the devcontainer install `.[dev,similar]`. `core/perceptual.py`: lazy `imagehash` import, `similar_available()`, pHash and dHash, 8 rotation and flip variants, border trim, uniform-image filter, the cache stamp.
-- [ ] Generated image pairs stay within 8 bits: resized, re-saved as JPEG at quality 60, +10 % brightness, EXIF-rotated, **rotated 90° with no EXIF**, **mirrored**, **letterboxed**
-- [ ] A gradient vs a checkerboard is more than 20 bits apart; a solid colour image is excluded
-- [ ] Golden-value test: fixed images give fixed hashes for the pinned `imagehash`/Pillow versions. A failure after an upgrade is the signal to review the cache stamp
-- [ ] With `imagehash` hidden (monkeypatched import), `similar_available()` is false and nothing else breaks
+- [x] Generated image pairs stay within 8 bits: resized, re-saved as JPEG at quality 60, +10 % brightness, EXIF-rotated, **rotated 90° with no EXIF**, **mirrored**, **letterboxed**
+- [x] A gradient vs a checkerboard is more than 20 bits apart; a solid colour image is excluded
+- [x] Golden-value test: fixed images give fixed hashes for the pinned `imagehash`/Pillow versions. A failure after an upgrade is the signal to review the cache stamp
+- [x] With `imagehash` hidden (monkeypatched import), `similar_available()` is false and nothing else breaks
 
 **Scope:** M
 

@@ -19,7 +19,10 @@ dependencies = [
 
 [project.optional-dependencies]
 heif = ["pillow-heif>=0.16"]
+similar = ["imagehash>=4.3,<5", "numpy>=2.0"]
 dev = [
+  "imagehash>=4.3,<5",
+  "numpy>=2.0",
   "pytest>=8",
   "pytest-qt>=4.4",
   "pytest-cov>=5",
