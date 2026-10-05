@@ -203,9 +203,10 @@ def test_accepting_trashes_logs_and_updates_the_model(
     assert "2 files moved to Trash" in harness.summaries[0]
     remaining = [p for p in root.rglob("x.txt")]
     assert len(remaining) == 1
-    qtbot_wait = harness.qtbot.waitUntil
-    qtbot_wait(lambda: not model.loading, timeout=5000)
-    assert model.group_count == 0 and model.selected_count == 0  # one copy left: no longer a group
+    harness.qtbot.waitUntil(
+        lambda: model.group_count == 0 and not model.loading, timeout=5000
+    )  # one copy left: no longer a group
+    assert model.selected_count == 0
     assert harness.window.groups_label.text() == "Duplicate groups: 0"
     log = [json.loads(line) for line in harness.window.log_path.read_text().splitlines()]  # type: ignore[union-attr]
     assert [r["action"] for r in log] == ["trash", "trash"]
@@ -279,7 +280,7 @@ def test_trashing_5k_files_never_stalls_the_gui(
     assert model.group_count == 2500 and model.selected_count == 2500
     with ui_watchdog.watch():
         harness.delete()
-        harness.qtbot.waitUntil(lambda: not model.loading, timeout=30000)
+        harness.qtbot.waitUntil(lambda: model.group_count == 0 and not model.loading, timeout=30000)
     assert harness.trash.calls == 2500
     assert len(list(root.rglob("*.txt"))) == 2500
     assert model.group_count == 0

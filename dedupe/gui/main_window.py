@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from dedupe.core.actions import ActionPlan, TrashFn
 from dedupe.core.formatting import human
 from dedupe.core.models import DeleteMode, DuplicateGroup, Progress, ScanResult, Stage
-from dedupe.core.settings import Settings
+from dedupe.core.settings import Settings, save_settings
 from dedupe.gui import icons
 from dedupe.gui.delete_dialog import DeleteChoice, DeleteDialog, format_summary
 from dedupe.gui.duplicates_view import DuplicatesTab
@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
         self.job: Job | None = None
         self.trash_backend: TrashFn | None = None  # tests inject a stub; None = send2trash
         self.log_path: Path | None = None  # None = the XDG action log
+        self.settings_path: Path | None = None  # None = the XDG settings file
         self._delete_request: tuple[list[DuplicateGroup], set[Path]] | None = None
         self.result: ScanResult | None = None
         self.folder: Path | None = None
@@ -91,7 +92,7 @@ class MainWindow(QMainWindow):
         self.error_label.hide()
 
         self.tabs = QTabWidget()
-        self.duplicates_tab = DuplicatesTab()
+        self.duplicates_tab = DuplicatesTab(self.runner)
         self.hidden_tab = QWidget()
         self.skipped_tab = QWidget()
         self.tabs.addTab(self.duplicates_tab, icons.icon("duplicates"), "Duplicates")
@@ -115,6 +116,8 @@ class MainWindow(QMainWindow):
             self.statusBar().addPermanentWidget(label)
 
         self.duplicates_tab.model.selection_changed.connect(self._update_selected_label)
+        self.duplicates_tab.source_changed.connect(self._update_totals)
+        self.duplicates_tab.folder_protected.connect(self._on_folder_protected)
         self.choose_button.clicked.connect(self.choose_folder)
         self.recent_combo.activated.connect(self._on_recent_activated)
         self.scan_button.clicked.connect(self.start_scan)
@@ -219,12 +222,8 @@ class MainWindow(QMainWindow):
             return
         summary = outcome.summary
         self.stage_label.setText("Dry run finished" if summary.dry_run else "Deletion finished")
-        if not summary.dry_run and outcome.remaining_groups is not None:
-            model = self.duplicates_tab.model
-            model.replace_groups(outcome.remaining_groups)
-            self.groups_label.setText(f"Duplicate groups: {len(outcome.remaining_groups)}")
-            wasted = sum(g.reclaimable for g in outcome.remaining_groups)
-            self.wasted_label.setText(f"Wasted space: {human(wasted)}")
+        if not summary.dry_run:
+            self.duplicates_tab.remove_paths(summary.gone)
         self.show_summary(format_summary(summary))
         self.action_finished.emit(summary)
 
@@ -287,7 +286,9 @@ class MainWindow(QMainWindow):
             self.files_label.setText(f"Files scanned: {result.files_scanned}")
             self.groups_label.setText(f"Duplicate groups: {len(result.groups)}")
             self.wasted_label.setText(f"Wasted space: {human(result.reclaimable)}")
-            self.duplicates_tab.set_groups(result.groups, self.settings.protected_folders)
+            self.duplicates_tab.set_groups(
+                result.groups, self.settings.protected_folders, result.root
+            )
             if result.root and not result.files_scanned and result.skipped:
                 self._show_error(f"{result.skipped[0].path}: {result.skipped[0].reason}")
         self._update_buttons()
@@ -302,6 +303,20 @@ class MainWindow(QMainWindow):
         self._show_error(message)
         self._update_buttons()
         self.scan_failed.emit(message)
+
+    def _update_totals(self) -> None:
+        tab = self.duplicates_tab
+        self.groups_label.setText(f"Duplicate groups: {tab.source_group_count}")
+        self.wasted_label.setText(f"Wasted space: {human(tab.source_reclaimable)}")
+
+    def _on_folder_protected(self, folder: Path) -> None:
+        """Remember the folder as protected (saved in a job), then re-run the recommendations."""
+        self.settings = self.settings.with_protected_folder(str(folder))
+        settings = self.settings
+        path = self.settings_path
+        self.runner.start(Job(lambda cancel, progress: save_settings(settings, path)))
+        self.duplicates_tab.set_protected(settings.protected_folders)
+        self.statusBar().showMessage(f"{folder} is now protected", 5000)
 
     def _update_selected_label(self) -> None:
         size = self.duplicates_tab.model.selected_size

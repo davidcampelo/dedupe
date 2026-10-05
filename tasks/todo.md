@@ -269,14 +269,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 ## Phase 4: GUI completeness
 
-### Task 15: Duplicates tab extras
+### Task 15: Duplicates tab extras ✅
 
 **Description:** Sorting (reclaimable/size/count) and filters (file type, path text) are handled in the model, not via a proxy re-sort over 100k rows, and text input is debounced by 200 ms. Context menu: open file/folder (`QDesktopServices`), copy path, mark Keep, mark folder Protected (persisted, then the recommendations rerun). Details panel. Bulk-rule menu.
 
 **Acceptance criteria:**
-- [ ] Sorting and filtering keep group children together; filtering the 100k model passes `ui_watchdog`
-- [ ] Marking a folder Protected updates every affected group immediately
-- [ ] Every bulk rule leaves exactly one Keep per group
+- [x] Sorting and filtering keep group children together; filtering the 100k model passes `ui_watchdog`
+- [x] Marking a folder Protected updates every affected group immediately
+- [x] Every bulk rule leaves exactly one Keep per group
 
 **Dependencies:** T13, T8
 

@@ -126,7 +126,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 **Checkpoint C:** scan → review → Trash → log works end to end in the GUI; the 100k-file watchdog run passes; cancel responds within 1 s.
 
 ### Phase 4: GUI completeness
-- [ ] T15: Duplicates tab extras: sort, filters, context menu, details panel, bulk rules
+- [x] T15: Duplicates tab extras: sort, filters, context menu, details panel, bulk rules
 - [ ] T16: Hidden & Temp tab + Skipped/Errors tab
 - [ ] T17: Thumbnail jobs + side-by-side image comparison + preview window
 - [ ] T18: Thumbnail grid browse mode

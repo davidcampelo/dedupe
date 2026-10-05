@@ -17,7 +17,6 @@ from dedupe.core.actions import (
     PlanRefused,
     TrashFn,
     execute,
-    groups_after,
     plan_actions,
 )
 from dedupe.core.cache import HashCache
@@ -103,8 +102,6 @@ class PlanOutcome:
 class ActionOutcome:
     summary: ActionSummary | None
     refused: tuple[str, ...] = ()
-    # the duplicate groups that remain after a real deletion, computed off the GUI thread
-    remaining_groups: tuple[DuplicateGroup, ...] | None = None
 
 
 class PlanJob(Job):
@@ -151,8 +148,7 @@ class ActionJob(Job):
             except PlanRefused as e:
                 return ActionOutcome(None, tuple(e.reasons))
             summary = execute(plan, dry_run, progress, cancel, log_path, trash)
-            remaining = None if dry_run else tuple(groups_after(groups, summary.gone))
-            return ActionOutcome(summary, remaining_groups=remaining)
+            return ActionOutcome(summary)
 
         super().__init__(work)
 

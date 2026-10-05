@@ -12,8 +12,9 @@ overrides are stored separately, so recommendations can be re-run without losing
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -25,29 +26,58 @@ from PySide6.QtCore import (
     QRect,
     Qt,
     QTimer,
+    QUrl,
     Signal,
 )
-from PySide6.QtGui import QKeyEvent, QMouseEvent, QPainter
+from PySide6.QtGui import (
+    QContextMenuEvent,
+    QDesktopServices,
+    QGuiApplication,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
+    QMenu,
     QPushButton,
+    QSplitter,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from dedupe.core.actions import groups_after
 from dedupe.core.formatting import human
-from dedupe.core.models import DuplicateGroup, FileEntry, Verdict
-from dedupe.core.recommender import is_protected
+from dedupe.core.models import (
+    CancelToken,
+    DuplicateGroup,
+    FileEntry,
+    ProgressCallback,
+    Verdict,
+)
+from dedupe.core.recommender import (
+    is_protected,
+    keep_in_folder,
+    keep_newest,
+    recommend_all,
+)
 from dedupe.gui import icons
+from dedupe.gui.details_panel import DetailsPanel
+from dedupe.gui.file_types import CATEGORIES
 from dedupe.gui.gcutil import freeze
+from dedupe.gui.view_options import SortKey, ViewOptions, select_groups
+from dedupe.gui.workers import Job, JobRunner
 
 COLUMNS = ("Group / File", "Size", "Copies", "Reclaimable", "Modified", "Status", "Reason")
 COL_ITEM, COL_SIZE, COL_COPIES, COL_RECLAIM, COL_MODIFIED, COL_STATUS, COL_REASON = range(7)
@@ -101,6 +131,7 @@ Node = FileNode | GroupNode
 class DuplicatesModel(QAbstractTableModel):
     selection_changed = Signal()
     load_finished = Signal()
+    overrides_applied = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -114,6 +145,11 @@ class DuplicatesModel(QAbstractTableModel):
         self._live_overrides: dict[Path, bool] = {}  # the user's current explicit choices
         self._selected: set[Path] = set()
         self._graveyard: list[list[GroupNode]] = []
+        self._apply_iter: Iterator[tuple[Path, bool | None]] = iter(())
+        self._apply_timer = QTimer(self)
+        self._apply_timer.setSingleShot(True)
+        self._apply_timer.setInterval(0)
+        self._apply_timer.timeout.connect(self._apply_slice)
         self._reaper = QTimer(self)
         self._reaper.setSingleShot(True)
         self._reaper.setInterval(0)
@@ -142,6 +178,8 @@ class DuplicatesModel(QAbstractTableModel):
         """Replace the contents; rows arrive in batches (see ``load_finished``).
         ``overrides`` carries the user's explicit choices over a reload."""
         self._timer.stop()
+        self._apply_timer.stop()
+        self._apply_iter = iter(())
         self._overrides = overrides or {}
         self._live_overrides = dict(self._overrides)
         self.beginResetModel()
@@ -324,25 +362,62 @@ class DuplicatesModel(QAbstractTableModel):
     def reclaimable(self) -> int:
         return sum(g.group.reclaimable for g in self._groups)
 
+    def live_overrides(self) -> dict[Path, bool]:
+        return dict(self._live_overrides)
+
     def select_all_suggested(self) -> None:
         """Reset every choice to the recommendation."""
-        for node in self._by_path.values():
-            node.override = None
         self._live_overrides = {}
-        self._recount()
+        self._start_apply((p, None) for p in self._by_path)
 
     def clear_selection(self) -> None:
-        for node in self._by_path.values():
-            if not node.protected:
-                node.override = False
-                self._live_overrides[node.entry.path] = False
-        self._recount()
+        self._start_apply(((p, False) for p, n in self._by_path.items() if not n.protected))
 
-    def _recount(self) -> None:
-        nodes = [n for n in self._by_path.values() if n.checked]
-        self._selected = {n.entry.path for n in nodes}
-        self.selected_count = len(nodes)
-        self.selected_size = sum(n.entry.size for n in nodes)
+    def apply_overrides(self, overrides: dict[Path, bool]) -> None:
+        """Apply many explicit choices; large batches are applied in time slices."""
+        self._start_apply(iter(list(overrides.items())))
+
+    def mark_keep(self, path: Path) -> None:
+        """Keep this copy and mark every other (unprotected) copy in its group for deletion."""
+        node = self._by_path.get(path)
+        if node is None:
+            return
+        changes: list[tuple[Path, bool | None]] = []
+        for f in node.group.files:
+            changes.append((f.entry.path, f is not node))
+        self._start_apply(iter(changes))
+
+    def _start_apply(self, items: Iterator[tuple[Path, bool | None]]) -> None:
+        self._apply_iter = items
+        self._apply_timer.stop()
+        self._apply_slice()
+
+    def _apply_slice(self) -> None:
+        start = time.perf_counter()
+        for count, (path, value) in enumerate(self._apply_iter, 1):
+            if value is None:
+                self._live_overrides.pop(path, None)
+            else:
+                self._live_overrides[path] = value
+            node = self._by_path.get(path)
+            if node is not None and not node.protected:
+                before = node.checked
+                node.override = value
+                after = node.checked
+                if before != after:
+                    delta = 1 if after else -1
+                    self.selected_count += delta
+                    self.selected_size += delta * node.entry.size
+                    if after:
+                        self._selected.add(path)
+                    else:
+                        self._selected.discard(path)
+            if count % 64 == 0 and time.perf_counter() - start > BATCH_BUDGET:
+                self._apply_timer.start()
+                break
+        else:
+            self._apply_iter = iter(())
+            self.overrides_applied.emit()
         if self._rows:
             self.dataChanged.emit(
                 self.index(0, 0), self.index(len(self._rows) - 1, len(COLUMNS) - 1)
@@ -502,6 +577,7 @@ class DuplicatesView(QTableView):
 
     delete_requested = Signal()
     group_activated = Signal(object)  # DuplicateGroup | None, when the current row changes
+    protect_folder_requested = Signal(object)  # Path
 
     def __init__(self, model: DuplicatesModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -522,6 +598,42 @@ class DuplicatesView(QTableView):
         for col, width in enumerate((520, 90, 60, 100, 130, 100)):
             self.setColumnWidth(col, width)
         self.selectionModel().currentRowChanged.connect(self._on_current_changed)
+
+    def build_menu(self, node: Node | None) -> QMenu:
+        """The right-click menu for a row (also used directly by tests)."""
+        menu = QMenu(self)
+        if isinstance(node, FileNode):
+            path = node.entry.path
+            menu.addAction(
+                "Open file", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            )
+            menu.addAction(
+                "Open containing folder",
+                lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent))),
+            )
+            menu.addAction("Copy path", lambda: QGuiApplication.clipboard().setText(str(path)))
+            menu.addSeparator()
+            keep = menu.addAction(
+                icons.icon("keep"), "Mark as Keep", lambda: self.dm.mark_keep(path)
+            )
+            keep.setEnabled(not node.protected)
+            menu.addAction(
+                icons.icon("protected-folder"),
+                "Mark folder as Protected",
+                lambda: self.protect_folder_requested.emit(path.parent),
+            )
+        elif isinstance(node, GroupNode):
+            label = "Collapse" if node.expanded else "Expand"
+            menu.addAction(label, lambda: self.dm.toggle_expanded(node))
+        return menu
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        index = self.indexAt(event.pos())
+        if not index.isValid():
+            return
+        if not self.selectionModel().isRowSelected(index.row()):
+            self.selectRow(index.row())
+        self.build_menu(DuplicatesModel.node_at(index)).exec(event.globalPos())
 
     def current_group(self) -> DuplicateGroup | None:
         node = DuplicatesModel.node_at(self.currentIndex())
@@ -591,36 +703,254 @@ class DuplicatesView(QTableView):
         event.accept()
 
 
-class DuplicatesTab(QWidget):
-    delete_requested = Signal()
+class BulkRule(StrEnum):
+    SUGGESTED = "Select all suggested"
+    NEWEST = "Keep the newest copy in every group"
+    FOLDER = "Keep copies in a folder…"
+    NONE = "Deselect everything"
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+
+class DuplicatesTab(QWidget):
+    """Filter bar + list + details panel. ``set_groups`` takes the full scan result; sort and
+    filters rebuild the visible list in a job (never on the GUI thread)."""
+
+    delete_requested = Signal()
+    folder_protected = Signal(object)  # Path: the user asked to protect this folder
+    view_changed = Signal()  # the visible list was rebuilt (sort or filter applied)
+    source_changed = Signal()  # the full list changed (deletion)
+
+    FILTER_DEBOUNCE_MS = 200
+
+    def __init__(self, runner: JobRunner | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.runner = runner or JobRunner(1)
         self.model = DuplicatesModel(self)
         self.view = DuplicatesView(self.model)
+        self.details = DetailsPanel()
+        self._source: tuple[DuplicateGroup, ...] = ()
+        self._protected: tuple[str, ...] = ()
+        self._root: Path | None = None
+        self._options = ViewOptions()
+        self._generation = 0
+        self._busy = False
+
+        self.sort_combo = QComboBox()
+        for key in SortKey:
+            self.sort_combo.addItem(key.value, key)
+        self.type_combo = QComboBox()
+        self.type_combo.addItem("All file types", None)
+        for category in CATEGORIES:
+            self.type_combo.addItem(category, category)
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText("Filter by path…")
+        self.filter_edit.setClearButtonEnabled(True)
+        self.bulk_button = QToolButton()
+        self.bulk_button.setText("Bulk rules")
+        self.bulk_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.bulk_menu = QMenu(self.bulk_button)
+        self.bulk_actions = {rule: self.bulk_menu.addAction(rule.value) for rule in BulkRule}
+        self.bulk_button.setMenu(self.bulk_menu)
+
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("Sort by"))
+        filters.addWidget(self.sort_combo)
+        filters.addWidget(self.type_combo)
+        filters.addWidget(self.filter_edit, 1)
+        filters.addWidget(self.bulk_button)
+
         self.summary = QLabel("Scan a folder to find duplicates.")
         self.delete_button = QPushButton(icons.icon("move-to-trash"), "Delete selected…")
         self.delete_button.setEnabled(False)
-        self._busy = False
         bar = QHBoxLayout()
         bar.addWidget(self.summary, 1)
         bar.addWidget(self.delete_button)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addLayout(filters)
+        left_layout.addWidget(self.view, 1)
+        left_layout.addLayout(bar)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.addWidget(left)
+        self.splitter.addWidget(self.details)
+        self.splitter.setStretchFactor(0, 4)
+        self.splitter.setStretchFactor(1, 1)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.view, 1)
-        layout.addLayout(bar)
+        layout.addWidget(self.splitter)
+
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(self.FILTER_DEBOUNCE_MS)
+        self._debounce.timeout.connect(self._options_changed)
+        self.filter_edit.textChanged.connect(lambda _: self._debounce.start())
+        self.sort_combo.currentIndexChanged.connect(lambda _: self._options_changed())
+        self.type_combo.currentIndexChanged.connect(lambda _: self._options_changed())
+        for rule, action in self.bulk_actions.items():
+            action.triggered.connect(lambda _=False, r=rule: self.apply_rule(r))
+
         self.model.selection_changed.connect(self._refresh)
         self.delete_button.clicked.connect(self.delete_requested)
         self.view.delete_requested.connect(self._maybe_delete)
+        self.view.protect_folder_requested.connect(self.folder_protected)
+        self.view.group_activated.connect(self._on_group_activated)
+
+    # -- data in -------------------------------------------------------------------------
 
     def set_groups(
-        self, groups: Sequence[DuplicateGroup], protected_folders: Iterable[str] = ()
+        self,
+        groups: Sequence[DuplicateGroup],
+        protected_folders: Iterable[str] = (),
+        root: Path | None = None,
     ) -> None:
-        self.model.set_groups(groups, protected_folders)
+        """A new scan result: every choice starts from the recommendations again."""
+        self._source = tuple(groups)
+        self._protected = tuple(protected_folders)
+        self._root = root
+        self._rebuild_view({})
+
+    def replace_groups(self, groups: Sequence[DuplicateGroup]) -> None:
+        """Groups after a deletion; the user's other choices are kept."""
+        self._source = tuple(groups)
+        self._rebuild_view(self.model.live_overrides())
+
+    def remove_paths(self, gone: frozenset[Path] | set[Path]) -> None:
+        """Files were deleted: drop them from the full list (not just the visible one), in a
+        job, and rebuild the view. A group left with one copy is no longer a duplicate group."""
+        source = self._source
+        overrides = self.model.live_overrides()
+        self._generation += 1
+        generation = self._generation
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> list[DuplicateGroup]:
+            return groups_after(source, gone)
+
+        job = Job(work)
+
+        def done(groups: list[DuplicateGroup]) -> None:
+            if generation == self._generation:
+                self._source = tuple(groups)
+                self.source_changed.emit()
+                self._rebuild_view(overrides)
+
+        job.signals.finished.connect(done)
+        self.runner.start(job)
+
+    @property
+    def source_reclaimable(self) -> int:
+        return sum(g.reclaimable for g in self._source)
+
+    @property
+    def source_group_count(self) -> int:
+        return len(self._source)
+
+    def set_protected(self, protected_folders: Iterable[str]) -> None:
+        """Protected folders changed: re-run the recommendations for every group (in a job)
+        and rebuild the view, keeping the user's explicit choices."""
+        protected = tuple(protected_folders)
+        self._protected = protected
+        source, root = self._source, self._root
+        overrides = self.model.live_overrides()
+        self._generation += 1
+        generation = self._generation
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> list[DuplicateGroup]:
+            return list(recommend_all(source, protected, root))
+
+        job = Job(work)
+
+        def done(groups: list[DuplicateGroup]) -> None:
+            if generation == self._generation:
+                self._source = tuple(groups)
+                self._rebuild_view(overrides)
+
+        job.signals.finished.connect(done)
+        self.runner.start(job)
+
+    def options(self) -> ViewOptions:
+        return self._options
+
+    # -- view rebuilding -------------------------------------------------------------------
+
+    def _options_changed(self) -> None:
+        self._debounce.stop()
+        self._options = ViewOptions(
+            SortKey(self.sort_combo.currentData()),
+            self.type_combo.currentData(),
+            self.filter_edit.text(),
+        )
+        self._rebuild_view(self.model.live_overrides())
+
+    def _rebuild_view(self, overrides: dict[Path, bool]) -> None:
+        self._generation += 1
+        generation = self._generation
+        if self._options.is_default:
+            self.model.set_groups(self._source, self._protected, overrides)
+            self.view_changed.emit()
+            return
+        source, options = self._source, self._options
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> list[DuplicateGroup]:
+            return select_groups(source, options)
+
+        job = Job(work)
+
+        def done(groups: list[DuplicateGroup]) -> None:
+            if generation == self._generation:  # a newer request supersedes this one
+                self.model.set_groups(groups, self._protected, overrides)
+                self.view_changed.emit()
+
+        job.signals.finished.connect(done)
+        self.runner.start(job)
+
+    # -- bulk rules --------------------------------------------------------------------------
+
+    def apply_rule(self, rule: BulkRule, folder: str | None = None) -> None:
+        if rule is BulkRule.SUGGESTED:
+            self.model.select_all_suggested()
+            return
+        if rule is BulkRule.NONE:
+            self.model.clear_selection()
+            return
+        if rule is BulkRule.FOLDER and folder is None:
+            folder = QFileDialog.getExistingDirectory(self, "Keep copies in this folder")
+            if not folder:
+                return
+        groups, protected, root = self.model.groups(), self._protected, self._root
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> dict[Path, bool]:
+            out: dict[Path, bool] = {}
+            for n, g in enumerate(groups):
+                if n % 256 == 0:
+                    time.sleep(0.0001)
+                if rule is BulkRule.NEWEST:
+                    recs = keep_newest(g, protected, root)
+                else:
+                    assert folder is not None
+                    recs = keep_in_folder(g, folder, protected, root)
+                for r in recs:
+                    out[r.path] = r.verdict is Verdict.DELETE
+            return out
+
+        job = Job(work)
+        job.signals.finished.connect(self.model.apply_overrides)
+        self.runner.start(job)
+
+    # -- misc ---------------------------------------------------------------------------------
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
         self._refresh()
+
+    def _on_group_activated(self, group: object) -> None:
+        node = DuplicatesModel.node_at(self.view.currentIndex())
+        if isinstance(node, FileNode):
+            self.details.show_file(node.entry, node.group.group, node.reason)
+        elif isinstance(group, DuplicateGroup):
+            self.details.show_group(group)
+        else:
+            self.details.clear()
 
     def _maybe_delete(self) -> None:
         if self.model.selected_count and not self._busy:
@@ -629,8 +959,13 @@ class DuplicatesTab(QWidget):
     def _refresh(self) -> None:
         m = self.model
         self.delete_button.setEnabled(m.selected_count > 0 and not m.loading and not self._busy)
-        if m.group_count or m.loading:
+        if m.group_count or m.loading or self._source:
+            shown = (
+                f"{m.group_count} of {len(self._source)} groups"
+                if m.group_count != len(self._source)
+                else f"{m.group_count} groups"
+            )
             self.summary.setText(
-                f"{m.group_count} groups · {m.selected_count} files selected "
-                f"({human(m.selected_size)})" + (" · loading…" if m.loading else "")
+                f"{shown} · {m.selected_count} files selected ({human(m.selected_size)})"
+                + (" · loading…" if m.loading else "")
             )
