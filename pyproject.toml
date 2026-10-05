@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Find duplicate files and clean hidden/temp files, safely."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
 dependencies = [
   "PySide6>=6.6",
   "blake3>=0.4",

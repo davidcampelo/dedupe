@@ -136,7 +136,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 
 ### Phase 5: Ship
 - [x] T20: Packaging: `.desktop`, hicolor icons, `pipx install .`, AppImage script (extends the full gate)
-- [ ] T21: README + acceptance pass against spec §10
+- [x] T21: README + acceptance pass against spec §10
 
 **Checkpoint E:** every spec §10 acceptance criterion is met, verified from a clean `pipx install` and from the AppImage.
 
@@ -170,6 +170,21 @@ Things the watchdog found that shaped the design (all fixed, all covered by the 
 - **GIL starvation.** The default 5 ms switch interval let pure-Python workers starve the GUI thread, so the app sets 0.2 ms (`tune_runtime`), and long worker loops in `actions.py` yield briefly (`_cooperate`). A 100k-entry `sorted()` of identities in the grouper held the GIL for 140 ms and now sorts only multi-link sets.
 - **Heavy GUI-thread work moved to workers:** result totals, the post-delete group list and the summary counters are computed in the job, not in the slot.
 - Coverage tracing slows Python 2 to 3x, so the full gate (which runs under `--cov`) is the strictest place these tests run; they pass there.
+
+## Acceptance pass (spec section 10)
+
+Run on 2026-10-05 in the devcontainer (no display, no remote, `/files` is a dangling symlink).
+
+| Criterion | Evidence |
+|---|---|
+| Runnable with `pipx install .`, then `dedupe-gui` and `dedupe` | `pipx install .` into a throwaway `PIPX_HOME` installs both commands. From that install: `dedupe --version` prints `dedupe 0.1.0`; `dedupe scan` finds the expected groups; `python -m dedupe --self-test` (builds the main window offscreen and checks every icon) prints `dedupe self-test: ok`. `tests/test_packaging.py::test_dedupe_gui_answers_help_and_version_without_a_display`. **Not done:** opening the window on a real display (none here). |
+| `README.md`: install, usage, screenshots placeholders, how detection works, safety guarantees | [README.md](../README.md): sections Install, Using the GUI, Using the CLI, How detection works, Safety guarantees, Responsiveness, Future ideas; screenshot placeholders under `docs/screenshots/` |
+| `.desktop` entry, SVG icon, AppImage build script | `data/io.github.davidcampelo.Dedupe.desktop` (validated by `desktop-file-validate` inside `scripts/check.sh`), `data/icons/hicolor/**` (scalable and symbolic SVG, PNG 16 to 256), `scripts/build_appimage.sh`. `scripts/build_appimage.sh` output: `built dist/Dedupe-0.1.0-x86_64.AppImage (100 MiB); --version and the GUI self-test passed from the AppImage` |
+| All tests pass; ruff clean | `scripts/check.sh` (full): ruff check and format clean, mypy `Success: no issues found in 35 source files`, `345 passed`, core coverage `95.42 %` (gate: 90 %), `desktop-file-validate` passes |
+| The UI stays responsive on a large folder; cancel works within about a second | `tests/gui/test_scale.py` (100,000 files): scan, load, dry-run delete and every-tab runs stay under the 100 ms watchdog (longest gaps 22, 28 and 39 ms, see "Recorded measurements"); `test_cancel_responds_within_a_second_on_100k_files` asserts cancel under 1 s; `tests/gui/test_main_window.py::test_slow_scan_cancels_within_a_second_without_stalling` |
+| No code path deletes a file without explicit user confirmation, and Trash is the default | `tests/test_deletion_audit.py` (deletion calls only in `core/actions.py`, plus `core/settings.py` for its own temp file); GUI: `test_rejecting_the_dialog_leaves_everything_intact`, `test_permanent_needs_the_checkbox_and_switching_modes_clears_it`, the CLI has no deletion code (audit); core: planner refusals and `test_each_guard_is_load_bearing` plus the manual mutation checks recorded under Checkpoint B; defaults: `test_trash_is_the_default_delete_mode`, `test_dialog_defaults_to_trash_and_lists_the_selection` |
+
+**Not verifiable here, so left for a human:** CI on GitHub (no remote), running the real window on a real display with real photos (including the `/files` collection and `DEDUPE_STALL_LOG=1`), approval of the icon contact sheet, and review of the screenshots to add to the README.
 
 ## Risks and mitigations
 

@@ -368,14 +368,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 21: README and acceptance pass
+### Task 21: README and acceptance pass ✅
 
 **Description:** `README.md` covers install, GUI and CLI usage, screenshot placeholders, how detection works, the safety guarantees, the responsiveness design and future ideas. Then walk through every spec §10 criterion and record the evidence in plan.md.
 
 **Acceptance criteria:**
-- [ ] The README covers spec §10 and §11
-- [ ] Every spec §10 criterion has recorded evidence (command output or test name)
-- [ ] The full gate passes; CI is green
+- [x] The README covers spec §10 and §11
+- [x] Every spec §10 criterion has recorded evidence (command output or test name)
+- [x] The full gate passes; CI is green
 
 **Dependencies:** T20
 
@@ -384,5 +384,5 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 **Scope:** S
 
 ## Checkpoint E: Complete
-- [ ] All spec §10 acceptance criteria are met, from a clean `pipx install` and from the AppImage
-- [ ] Ready for review
+- [x] All spec §10 acceptance criteria are met, from a clean `pipx install` and from the AppImage (evidence table in plan.md; the one thing not exercised is a window on a real display)
+- [x] Ready for review

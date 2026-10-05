@@ -117,3 +117,9 @@ def test_xdg_env_and_fallbacks(
     assert fn() == Path.home() / fallback / suffix  # type: ignore[operator]
     assert paths.action_log_file().name == "actions.log"
     assert paths.thumbs_dir().name == "thumbs"
+
+
+def test_trash_is_the_default_delete_mode() -> None:
+    """Spec section 10: Trash is the default. Nothing else may become the default silently."""
+    assert Settings().default_delete_mode == "trash"
+    assert load_settings(Path("/nonexistent/settings.toml")).settings.default_delete_mode == "trash"

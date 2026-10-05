@@ -181,3 +181,20 @@ def test_built_wheel_contains_the_app_icons_desktop_file_and_entry_points(tmp_pa
         and "dedupe-gui = dedupe.gui.app:main" in entry_points
     )
     assert "[gui_scripts]" in entry_points
+
+
+def test_dedupe_gui_answers_help_and_version_without_a_display() -> None:
+    env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
+    env["QT_QPA_PLATFORM"] = "xcb"  # would abort if Qt were started
+    for flag, expected in (
+        ("--version", f"dedupe {dedupe.__version__}"),
+        ("--help", "usage: dedupe-gui"),
+    ):
+        result = subprocess.run(
+            [sys.executable, "-c", "from dedupe.gui.app import main; main()", flag],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+        assert result.returncode == 0 and expected in result.stdout, result.stderr
