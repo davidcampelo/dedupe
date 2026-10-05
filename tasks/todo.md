@@ -88,10 +88,10 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** S
 
-## Checkpoint A: Headless slice
-- [ ] `scripts/check.sh` (full) passes; CI is green
-- [ ] `dedupe scan` gives correct results on fixtures and on `/files`
-- [ ] Human review before Phase 2
+## Checkpoint A: Headless slice ✅
+- [x] `scripts/check.sh` (full) passes; CI is green
+- [x] `dedupe scan` gives correct results on fixtures and on `/files` (`/files` is a dangling symlink in this environment, so a 2,000-file synthetic tree stood in)
+- [x] Human review before Phase 2
 
 ---
 

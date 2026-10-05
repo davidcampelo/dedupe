@@ -133,9 +133,13 @@ def _cmd_scan(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "scan":
-        return _cmd_scan(args)
-    parser.print_help()
+    try:
+        if args.command == "scan":
+            return _cmd_scan(args)
+        parser.print_help()
+    except BrokenPipeError:  # e.g. `dedupe scan . | head`
+        sys.stderr.close()
+        return 0
     return 0
 
 
