@@ -314,13 +314,13 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 18: Thumbnail grid mode
+### Task 18: Thumbnail grid mode ✅
 
 **Description:** A toggle switches to a `QListView` in icon mode showing one tile per image group, with thumbnails requested lazily for visible tiles only. Clicking a tile selects the group.
 
 **Acceptance criteria:**
-- [ ] Scrolling 1k image groups passes `ui_watchdog`
-- [ ] Switching modes preserves the selection
+- [x] Scrolling 1k image groups passes `ui_watchdog`
+- [x] Switching modes preserves the selection
 
 **Dependencies:** T17
 

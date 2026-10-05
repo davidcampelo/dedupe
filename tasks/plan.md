@@ -129,7 +129,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 - [x] T15: Duplicates tab extras: sort, filters, context menu, details panel, bulk rules
 - [x] T16: Hidden & Temp tab + Skipped/Errors tab
 - [x] T17: Thumbnail jobs + side-by-side image comparison + preview window
-- [ ] T18: Thumbnail grid browse mode
+- [x] T18: Thumbnail grid browse mode
 - [ ] T19: Settings dialog, persisted UI state, theme handling
 
 **Checkpoint D:** every spec §7 feature works by hand; keyboard navigation works; the 100k-file watchdog run passes with every tab populated.

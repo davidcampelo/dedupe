@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -77,6 +78,7 @@ from dedupe.gui.details_panel import DetailsPanel
 from dedupe.gui.file_types import CATEGORIES
 from dedupe.gui.gcutil import freeze
 from dedupe.gui.image_compare import ImageComparePanel
+from dedupe.gui.image_grid import ImageGridView, image_groups
 from dedupe.gui.thumbnails import ThumbnailService
 from dedupe.gui.view_options import SortKey, ViewOptions, select_groups
 from dedupe.gui.workers import Job, JobRunner
@@ -720,6 +722,7 @@ class DuplicatesTab(QWidget):
     folder_protected = Signal(object)  # Path: the user asked to protect this folder
     view_changed = Signal()  # the visible list was rebuilt (sort or filter applied)
     source_changed = Signal()  # the full list changed (deletion)
+    grid_changed = Signal()  # the grid tiles were rebuilt
 
     FILTER_DEBOUNCE_MS = 200
 
@@ -738,6 +741,7 @@ class DuplicatesTab(QWidget):
         self._options = ViewOptions()
         self._generation = 0
         self._busy = False
+        self._grid_generation = 0
 
         self.sort_combo = QComboBox()
         for key in SortKey:
@@ -749,6 +753,12 @@ class DuplicatesTab(QWidget):
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("Filter by path…")
         self.filter_edit.setClearButtonEnabled(True)
+        self.grid_button = QToolButton()
+        self.grid_button.setText("Grid")
+        self.grid_button.setIcon(icons.icon("compare-images"))
+        self.grid_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.grid_button.setCheckable(True)
+        self.grid_button.setToolTip("Browse image groups as a grid of thumbnails")
         self.bulk_button = QToolButton()
         self.bulk_button.setText("Bulk rules")
         self.bulk_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -761,6 +771,7 @@ class DuplicatesTab(QWidget):
         filters.addWidget(self.sort_combo)
         filters.addWidget(self.type_combo)
         filters.addWidget(self.filter_edit, 1)
+        filters.addWidget(self.grid_button)
         filters.addWidget(self.bulk_button)
 
         self.summary = QLabel("Scan a folder to find duplicates.")
@@ -774,7 +785,11 @@ class DuplicatesTab(QWidget):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.addLayout(filters)
-        left_layout.addWidget(self.view, 1)
+        self.grid = ImageGridView(self.thumbnails)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.view)
+        self.stack.addWidget(self.grid)
+        left_layout.addWidget(self.stack, 1)
         left_layout.addLayout(bar)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         side = QWidget()
@@ -806,6 +821,9 @@ class DuplicatesTab(QWidget):
         self.view.delete_requested.connect(self._maybe_delete)
         self.view.protect_folder_requested.connect(self.folder_protected)
         self.view.group_activated.connect(self._on_group_activated)
+        self.grid_button.toggled.connect(self._set_grid_mode)
+        self.grid.group_selected.connect(self._on_grid_selected)
+        self.model.load_finished.connect(self._refresh_grid)
 
     # -- data in -------------------------------------------------------------------------
 
@@ -947,6 +965,63 @@ class DuplicatesTab(QWidget):
         job = Job(work)
         job.signals.finished.connect(self.model.apply_overrides)
         self.runner.start(job)
+
+    # -- grid mode ----------------------------------------------------------------------------
+
+    @property
+    def grid_mode(self) -> bool:
+        return self.stack.currentWidget() is self.grid
+
+    def _set_grid_mode(self, on: bool) -> None:
+        current = self.view.current_group() if not self.grid_mode else self.grid.selected_group()
+        if on:
+            self.stack.setCurrentWidget(self.grid)
+            self._refresh_grid(select=current)
+        else:
+            self.stack.setCurrentWidget(self.view)
+            self.select_group(current)
+
+    def _refresh_grid(self, select: DuplicateGroup | None = None) -> None:
+        """Rebuild the tiles from the visible groups (a job: it scans every group)."""
+        if not self.grid_mode:
+            return
+        groups = self.model.groups()
+        selected = select if isinstance(select, DuplicateGroup) else self.grid.selected_group()
+        self._grid_generation += 1
+        generation = self._grid_generation
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> list[DuplicateGroup]:
+            return image_groups(groups)
+
+        job = Job(work)
+
+        def done(result: list[DuplicateGroup]) -> None:
+            if generation != self._grid_generation or not self.grid_mode:
+                return
+            self.grid.set_groups(result)
+            if selected is not None:
+                self.grid.select_group(selected)
+            self.grid_changed.emit()
+
+        job.signals.finished.connect(done)
+        self.runner.start(job)
+
+    def _on_grid_selected(self, group: object) -> None:
+        if isinstance(group, DuplicateGroup):
+            self.details.show_group(group)
+        self.compare.show_group(group if isinstance(group, DuplicateGroup) else None)
+
+    def select_group(self, group: DuplicateGroup | None) -> bool:
+        """Select a group's header row in the list (expanding nothing)."""
+        if group is None:
+            return False
+        for node in self.model._groups:
+            if node.group is group:
+                index = self.model.index(node.row, COL_ITEM)
+                self.view.setCurrentIndex(index)
+                self.view.scrollTo(index, QAbstractItemView.ScrollHint.PositionAtCenter)
+                return True
+        return False
 
     # -- misc ---------------------------------------------------------------------------------
 
