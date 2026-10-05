@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import stat
 import time
 import uuid
@@ -31,6 +32,8 @@ from typing import IO
 import send2trash
 
 from dedupe.core import paths
+from dedupe.core.hidden import HiddenItem
+from dedupe.core.hidden import is_protected as is_protected_name
 from dedupe.core.models import (
     CancelToken,
     DeleteMode,
@@ -74,6 +77,8 @@ class PlannedItem:
     group_hash: str
     keepers: tuple[FileEntry, ...]  # group members not selected for removal
     link_target: FileEntry | None = None  # hardlink mode: the copy that stays
+    requires_keeper: bool = True  # False only for hidden/temp files, which have no twin
+    is_dir: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +276,48 @@ def plan_actions(
     return plan
 
 
+def plan_hidden_actions(
+    items: Iterable[HiddenItem],
+    mode: DeleteMode = DeleteMode.TRASH,
+    allow_protected: Iterable[Path] = (),
+) -> ActionPlan:
+    """Plan removal of hidden/temp files and folders (no duplicate groups, no kept copy).
+
+    Refused outright: hard-link mode, the filesystem root, the home folder itself, and any item
+    on the protected list unless the caller names it in ``allow_protected`` (the GUI does that
+    only after the user's extra confirmation)."""
+    items = list(items)
+    allowed = {Path(p) for p in allow_protected}
+    home = Path.home()
+    reasons: list[str] = []
+    if mode is DeleteMode.HARDLINK:
+        reasons.append("hard links do not apply to hidden and temporary files")
+    seen: set[Path] = set()
+    for item in items:
+        p = item.path
+        if p in seen:
+            continue
+        seen.add(p)
+        if p == Path(p.anchor) or p == home or p in home.parents:
+            reasons.append(f"{p}: refusing to remove the root or home folder")
+        elif (item.protected or is_protected_name(p)) and p not in allowed:
+            reasons.append(f"{p}: is on the protected list and was not explicitly confirmed")
+    if reasons:
+        raise PlanRefused(sorted(reasons))
+    planned = [
+        PlannedItem(
+            FileEntry(i.path, i.size, i.mtime_ns, i.inode, i.device, i.mode),
+            "",
+            (),
+            None,
+            requires_keeper=False,
+            is_dir=i.is_dir,
+        )
+        for i in sorted({i.path: i for i in items}.values(), key=lambda i: str(i.path))
+    ]
+    return ActionPlan(mode, tuple(planned), False, "hard links do not apply to hidden files")
+
+
 def _key(g: DuplicateGroup) -> str:
     return g.hash or "|".join(sorted(str(f.path) for f in g.files))
 
@@ -294,10 +341,15 @@ def _verify_unchanged(entry: FileEntry) -> str | None:
         return "no longer exists"
     except OSError as e:
         return e.strerror or "cannot stat"
-    if not stat.S_ISREG(st.st_mode):
+    if entry.mode:
+        if stat.S_IFMT(st.st_mode) != stat.S_IFMT(entry.mode):
+            return "its type (file, folder, link) changed"
+    elif not stat.S_ISREG(st.st_mode):
         return "no longer a regular file"
-    if (st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev) != (
-        entry.size,
+    # A folder's size is the sum of its contents at scan time, so only its identity and
+    # modification time can be compared.
+    size_matches = stat.S_ISDIR(st.st_mode) or st.st_size == entry.size
+    if not size_matches or (st.st_mtime_ns, st.st_ino, st.st_dev) != (
         entry.mtime_ns,
         entry.inode,
         entry.device,
@@ -391,12 +443,20 @@ def _execute_one(
     problem = _verify_unchanged(entry)
     if problem:
         return ActionResult(entry.path, entry.size, Status.CHANGED, problem)
-    keeper = _verify_keeper(
-        (item.link_target,) if mode is DeleteMode.HARDLINK and item.link_target else item.keepers
-    )
-    if keeper is None:
-        return ActionResult(entry.path, entry.size, Status.KEEPER_CHANGED)
+    keeper: FileEntry | None = None
+    if item.requires_keeper:
+        keeper = _verify_keeper(
+            (item.link_target,)
+            if mode is DeleteMode.HARDLINK and item.link_target
+            else item.keepers
+        )
+        if keeper is None:
+            return ActionResult(entry.path, entry.size, Status.KEEPER_CHANGED)
     if mode is DeleteMode.HARDLINK:
+        if keeper is None:
+            return ActionResult(
+                entry.path, entry.size, Status.FAILED, "hard links need a kept copy"
+            )
         if keeper.device != entry.device:
             return ActionResult(entry.path, entry.size, Status.FAILED, "different filesystem")
         if keeper.inode == entry.inode:
@@ -407,12 +467,18 @@ def _execute_one(
         if mode is DeleteMode.TRASH:
             trash(str(entry.path))  # on failure: reported, never retried as a permanent delete
         elif mode is DeleteMode.PERMANENT:
-            os.unlink(entry.path)
+            if item.is_dir:
+                shutil.rmtree(entry.path)  # never follows symlinks; a failure is reported per item
+            else:
+                os.unlink(entry.path)
         else:
+            assert keeper is not None
             _replace_with_hardlink(keeper.path, entry.path)
     except (OSError, send2trash.TrashPermissionError) as e:
         return ActionResult(entry.path, entry.size, Status.FAILED, _describe(e))
-    return ActionResult(entry.path, entry.size, Status.DONE, f"kept {keeper.path}")
+    return ActionResult(
+        entry.path, entry.size, Status.DONE, f"kept {keeper.path}" if keeper is not None else ""
+    )
 
 
 def _replace_with_hardlink(keep: Path, dup: Path) -> None:
@@ -434,6 +500,7 @@ def _describe(e: Exception) -> str:
 def _log_record(mode: DeleteMode, item: PlannedItem, result: ActionResult) -> dict[str, object]:
     record: dict[str, object] = {
         "action": mode.value,
+        "kind": "folder" if item.is_dir else "file",
         "path": str(item.entry.path),
         "size": item.entry.size,
         "hash": item.group_hash,

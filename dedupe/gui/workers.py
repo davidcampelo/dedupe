@@ -18,8 +18,10 @@ from dedupe.core.actions import (
     TrashFn,
     execute,
     plan_actions,
+    plan_hidden_actions,
 )
 from dedupe.core.cache import HashCache
+from dedupe.core.hidden import HiddenItem, HiddenResult, scan_hidden
 from dedupe.core.models import (
     CancelToken,
     DeleteMode,
@@ -149,6 +151,57 @@ class ActionJob(Job):
                 return ActionOutcome(None, tuple(e.reasons))
             summary = execute(plan, dry_run, progress, cancel, log_path, trash)
             return ActionOutcome(summary)
+
+        super().__init__(work)
+
+
+class HiddenScanJob(Job):
+    def __init__(self, root: Path, temp_patterns: bool = True) -> None:
+        def work(cancel: CancelToken, progress: ProgressCallback) -> HiddenResult:
+            return scan_hidden(root, cancel, progress, temp_patterns)
+
+        super().__init__(work)
+        self.root = root
+
+
+class HiddenPlanJob(Job):
+    def __init__(
+        self,
+        items: list[HiddenItem],
+        allow_protected: Iterable[Path] = (),
+        mode: DeleteMode = DeleteMode.TRASH,
+    ) -> None:
+        allowed = tuple(allow_protected)
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> PlanOutcome:
+            try:
+                return PlanOutcome(plan_hidden_actions(items, mode, allowed))
+            except PlanRefused as e:
+                return PlanOutcome(None, tuple(e.reasons))
+
+        super().__init__(work)
+
+
+class HiddenActionJob(Job):
+    """Plans and executes removal of hidden/temp items in the chosen mode."""
+
+    def __init__(
+        self,
+        items: list[HiddenItem],
+        mode: DeleteMode,
+        dry_run: bool,
+        allow_protected: Iterable[Path] = (),
+        trash: TrashFn | None = None,
+        log_path: Path | None = None,
+    ) -> None:
+        allowed = tuple(allow_protected)
+
+        def work(cancel: CancelToken, progress: ProgressCallback) -> ActionOutcome:
+            try:
+                plan = plan_hidden_actions(items, mode, allowed)
+            except PlanRefused as e:
+                return ActionOutcome(None, tuple(e.reasons))
+            return ActionOutcome(execute(plan, dry_run, progress, cancel, log_path, trash))
 
         super().__init__(work)
 

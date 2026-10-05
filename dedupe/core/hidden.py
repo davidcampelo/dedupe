@@ -51,6 +51,11 @@ class HiddenItem:
     protected: bool = False
     home_toplevel_dot: bool = False
     preselect: bool = False
+    # lstat facts at scan time, used to re-verify the item before it is touched
+    mtime_ns: int = 0
+    inode: int = 0
+    device: int = 0
+    mode: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +217,10 @@ def scan_hidden(
                             preselect=not protected
                             and not home_dot
                             and _preselect(de.name, category, path, held),
+                            mtime_ns=st.st_mtime_ns,
+                            inode=st.st_ino,
+                            device=st.st_dev,
+                            mode=st.st_mode,
                         )
                     )
     except CancelledError:

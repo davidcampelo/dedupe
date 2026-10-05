@@ -284,14 +284,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 16: Hidden & Temp tab and Skipped/Errors tab
+### Task 16: Hidden & Temp tab and Skipped/Errors tab ✅
 
 **Description:** The hidden scan runs in a `HiddenScanJob`. The table preselects per `preselect` and shows protected rows unchecked. Selecting protected items or anything inside a top-level home dot folder needs an extra confirmation. Shows the reclaimable total and reuses the T14 dialog and `ActionJob`. The Skipped tab lists path and reason.
 
 **Acceptance criteria:**
-- [ ] `~$x.docx` and `x~` are preselected; `.bashrc` is unchecked; ticking `~/.ssh/...` asks for confirmation
-- [ ] The reclaimable total equals the sum of the selected sizes
-- [ ] A hidden scan of a 50k-entry tree passes `ui_watchdog`
+- [x] `~$x.docx` and `x~` are preselected; `.bashrc` is unchecked; ticking `~/.ssh/...` asks for confirmation
+- [x] The reclaimable total equals the sum of the selected sizes
+- [x] A hidden scan of a 50k-entry tree passes `ui_watchdog`
 
 **Dependencies:** T7, T14
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -25,14 +26,20 @@ from PySide6.QtWidgets import (
 
 from dedupe.core.actions import ActionPlan, TrashFn
 from dedupe.core.formatting import human
+from dedupe.core.hidden import HiddenItem, HiddenResult
 from dedupe.core.models import DeleteMode, DuplicateGroup, Progress, ScanResult, Stage
 from dedupe.core.settings import Settings, save_settings
 from dedupe.gui import icons
 from dedupe.gui.delete_dialog import DeleteChoice, DeleteDialog, format_summary
 from dedupe.gui.duplicates_view import DuplicatesTab
+from dedupe.gui.hidden_files_view import HiddenFilesTab
+from dedupe.gui.skipped_view import SkippedTab
 from dedupe.gui.workers import (
     ActionJob,
     ActionOutcome,
+    HiddenActionJob,
+    HiddenPlanJob,
+    HiddenScanJob,
     Job,
     JobRunner,
     PlanJob,
@@ -42,6 +49,17 @@ from dedupe.gui.workers import (
 
 MAX_RECENT = 10
 BYTE_STAGES = {Stage.PARTIAL, Stage.FULL, Stage.COMPARE}
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteRequest:
+    """What a deletion was asked for, kept while the plan is checked and the user confirms."""
+
+    kind: str  # "duplicates" or "hidden"
+    groups: list[DuplicateGroup] = field(default_factory=list)
+    selection: set[Path] = field(default_factory=set)
+    hidden_items: list[HiddenItem] = field(default_factory=list)
+    allow_protected: tuple[Path, ...] = ()
 
 
 class MainWindow(QMainWindow):
@@ -57,7 +75,8 @@ class MainWindow(QMainWindow):
         self.trash_backend: TrashFn | None = None  # tests inject a stub; None = send2trash
         self.log_path: Path | None = None  # None = the XDG action log
         self.settings_path: Path | None = None  # None = the XDG settings file
-        self._delete_request: tuple[list[DuplicateGroup], set[Path]] | None = None
+        self._delete_request: DeleteRequest | None = None
+        self._active_kind = "duplicates"
         self.result: ScanResult | None = None
         self.folder: Path | None = None
         self.recent: list[str] = []
@@ -93,8 +112,8 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.duplicates_tab = DuplicatesTab(self.runner)
-        self.hidden_tab = QWidget()
-        self.skipped_tab = QWidget()
+        self.hidden_tab = HiddenFilesTab()
+        self.skipped_tab = SkippedTab()
         self.tabs.addTab(self.duplicates_tab, icons.icon("duplicates"), "Duplicates")
         self.tabs.addTab(self.hidden_tab, icons.icon("hidden-files"), "Hidden && Temp Files")
         self.tabs.addTab(self.skipped_tab, icons.icon("skipped-error"), "Skipped / Errors")
@@ -118,6 +137,7 @@ class MainWindow(QMainWindow):
         self.duplicates_tab.model.selection_changed.connect(self._update_selected_label)
         self.duplicates_tab.source_changed.connect(self._update_totals)
         self.duplicates_tab.folder_protected.connect(self._on_folder_protected)
+        self.hidden_tab.delete_requested.connect(self.request_hidden_delete)
         self.choose_button.clicked.connect(self.choose_folder)
         self.recent_combo.activated.connect(self._on_recent_activated)
         self.scan_button.clicked.connect(self.start_scan)
@@ -188,9 +208,20 @@ class MainWindow(QMainWindow):
         model = self.duplicates_tab.model
         if self.busy or model.loading or model.selected_count == 0:
             return
-        self._delete_request = (model.groups(), model.selected_paths())
-        groups, selection = self._delete_request
+        groups, selection = model.groups(), model.selected_paths()
+        self._delete_request = DeleteRequest("duplicates", groups, selection)
         job = PlanJob(groups, selection, self.settings.protected_folders)
+        self._begin(job, "Checking the selection…", self._on_plan_finished)
+
+    def request_hidden_delete(self) -> None:
+        model = self.hidden_tab.model
+        if self.busy or model.selected_count == 0:
+            return
+        items = model.selected_items()
+        # Items on the protected list were explicitly confirmed when they were ticked.
+        allow = tuple(i.path for i in items if i.protected)
+        self._delete_request = DeleteRequest("hidden", hidden_items=items, allow_protected=allow)
+        job = HiddenPlanJob(items, allow)
         self._begin(job, "Checking the selection…", self._on_plan_finished)
 
     def _on_plan_finished(self, outcome: PlanOutcome) -> None:
@@ -203,16 +234,27 @@ class MainWindow(QMainWindow):
         if choice is None:
             self.stage_label.setText("Deletion cancelled; nothing was changed")
             return
-        groups, selection = request
-        job = ActionJob(
-            groups,
-            selection,
-            choice.mode,
-            choice.dry_run,
-            self.settings.protected_folders,
-            self.trash_backend,
-            self.log_path,
-        )
+        job: Job
+        if request.kind == "hidden":
+            job = HiddenActionJob(
+                request.hidden_items,
+                choice.mode,
+                choice.dry_run,
+                request.allow_protected,
+                self.trash_backend,
+                self.log_path,
+            )
+        else:
+            job = ActionJob(
+                request.groups,
+                request.selection,
+                choice.mode,
+                choice.dry_run,
+                self.settings.protected_folders,
+                self.trash_backend,
+                self.log_path,
+            )
+        self._active_kind = request.kind
         self._begin(job, "Preparing…", self._on_action_finished)
 
     def _on_action_finished(self, outcome: ActionOutcome) -> None:
@@ -223,7 +265,10 @@ class MainWindow(QMainWindow):
         summary = outcome.summary
         self.stage_label.setText("Dry run finished" if summary.dry_run else "Deletion finished")
         if not summary.dry_run:
-            self.duplicates_tab.remove_paths(summary.gone)
+            if self._active_kind == "hidden":
+                self.hidden_tab.model.remove_paths(summary.gone)
+            else:
+                self.duplicates_tab.remove_paths(summary.gone)
         self.show_summary(format_summary(summary))
         self.action_finished.emit(summary)
 
@@ -273,24 +318,49 @@ class MainWindow(QMainWindow):
         self._update_buttons()
 
     def _on_finished(self, result: ScanResult) -> None:
+        """The duplicate scan finished; the hidden-file scan follows as part of the same scan."""
         self.job = None
         self.progress_bar.setRange(0, 1000)
-        self.progress_bar.setValue(0 if result.cancelled else 1000)
         if result.cancelled:
+            self.progress_bar.setValue(0)
             self.stage_label.setText("Cancelled")
+            self._update_buttons()
+            self.scan_finished.emit(result)
+            return
+        self.result = result
+        self.progress_bar.setValue(1000)
+        self.stage_label.setText(
+            f"Done: {len(result.groups)} duplicate groups in {result.files_scanned} files"
+        )
+        self.files_label.setText(f"Files scanned: {result.files_scanned}")
+        self.groups_label.setText(f"Duplicate groups: {len(result.groups)}")
+        self.wasted_label.setText(f"Wasted space: {human(result.reclaimable)}")
+        self.duplicates_tab.set_groups(result.groups, self.settings.protected_folders, result.root)
+        self.skipped_tab.set_entries(result.skipped)
+        self.hidden_tab.set_items(())
+        if result.files_scanned == 0 and result.skipped:  # the folder itself was unusable
+            self._show_error(f"{result.skipped[0].path}: {result.skipped[0].reason}")
+            self._update_buttons()
+            self.scan_finished.emit(result)
+            return
+        job = HiddenScanJob(result.root, self.hidden_tab.temp_patterns.isChecked())
+        self._begin(job, "Looking for hidden and temporary files…", self._on_hidden_finished)
+
+    def _on_hidden_finished(self, hidden: HiddenResult) -> None:
+        self.job = None
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(0 if hidden.cancelled else 1000)
+        result = self.result
+        assert result is not None
+        if hidden.cancelled:
+            self.stage_label.setText("Cancelled (hidden files not scanned)")
         else:
-            self.result = result
+            self.hidden_tab.set_items(hidden.items)
+            self.skipped_tab.set_entries((*result.skipped, *hidden.skipped))
             self.stage_label.setText(
-                f"Done: {len(result.groups)} duplicate groups in {result.files_scanned} files"
+                f"Done: {len(result.groups)} duplicate groups, {len(hidden.items)} hidden or "
+                f"temporary items in {result.files_scanned} files"
             )
-            self.files_label.setText(f"Files scanned: {result.files_scanned}")
-            self.groups_label.setText(f"Duplicate groups: {len(result.groups)}")
-            self.wasted_label.setText(f"Wasted space: {human(result.reclaimable)}")
-            self.duplicates_tab.set_groups(
-                result.groups, self.settings.protected_folders, result.root
-            )
-            if result.root and not result.files_scanned and result.skipped:
-                self._show_error(f"{result.skipped[0].path}: {result.skipped[0].reason}")
         self._update_buttons()
         self.scan_finished.emit(result)
 
@@ -333,6 +403,7 @@ class MainWindow(QMainWindow):
         self.recent_combo.setEnabled(not busy)
         self.cancel_button.setEnabled(busy)
         self.duplicates_tab.set_busy(busy)
+        self.hidden_tab.set_busy(busy)
 
     # -- lifecycle -----------------------------------------------------------------------
 

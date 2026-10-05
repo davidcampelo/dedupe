@@ -127,7 +127,7 @@ Built into the test suite from Task 1 onwards, so every gate enforces them:
 
 ### Phase 4: GUI completeness
 - [x] T15: Duplicates tab extras: sort, filters, context menu, details panel, bulk rules
-- [ ] T16: Hidden & Temp tab + Skipped/Errors tab
+- [x] T16: Hidden & Temp tab + Skipped/Errors tab
 - [ ] T17: Thumbnail jobs + side-by-side image comparison + preview window
 - [ ] T18: Thumbnail grid browse mode
 - [ ] T19: Settings dialog, persisted UI state, theme handling
