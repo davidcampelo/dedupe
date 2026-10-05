@@ -299,14 +299,14 @@ Plan, decisions and rationale: [plan.md](plan.md). Spec: [docs/duplicate-finder-
 
 **Scope:** M
 
-### Task 17: Thumbnails and image comparison
+### Task 17: Thumbnails and image comparison ✅
 
 **Description:** `gui/thumbnails.py`: `ThumbnailJob`s on a dedicated bounded `QThreadPool`. They decode with Pillow (applying EXIF orientation, and HEIC when available). Thumbnails are cached in a memory LRU and on disk keyed by hash; the freedesktop cache is reused when valid. Jobs for groups that are no longer visible are cancelled. `gui/image_compare.py` shows the images side by side, each with resolution, size, mtime, EXIF date and a Keep/Delete toggle bound to the model. Double-clicking opens a preview.
 
 **Acceptance criteria:**
-- [ ] Placeholders appear at once; selecting 20 large-image groups quickly passes `ui_watchdog`
-- [ ] A corrupt image shows an error placeholder and doesn't crash
-- [ ] Keep/Delete stays in sync between the compare panel and the tree
+- [x] Placeholders appear at once; selecting 20 large-image groups quickly passes `ui_watchdog`
+- [x] A corrupt image shows an error placeholder and doesn't crash
+- [x] Keep/Delete stays in sync between the compare panel and the tree
 
 **Dependencies:** T13
 

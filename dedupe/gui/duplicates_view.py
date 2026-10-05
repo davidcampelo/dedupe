@@ -76,6 +76,8 @@ from dedupe.gui import icons
 from dedupe.gui.details_panel import DetailsPanel
 from dedupe.gui.file_types import CATEGORIES
 from dedupe.gui.gcutil import freeze
+from dedupe.gui.image_compare import ImageComparePanel
+from dedupe.gui.thumbnails import ThumbnailService
 from dedupe.gui.view_options import SortKey, ViewOptions, select_groups
 from dedupe.gui.workers import Job, JobRunner
 
@@ -727,6 +729,9 @@ class DuplicatesTab(QWidget):
         self.model = DuplicatesModel(self)
         self.view = DuplicatesView(self.model)
         self.details = DetailsPanel()
+        self.thumbnails = ThumbnailService(self)
+        self.compare = ImageComparePanel(self.thumbnails)
+        self.compare.bind(self.model)
         self._source: tuple[DuplicateGroup, ...] = ()
         self._protected: tuple[str, ...] = ()
         self._root: Path | None = None
@@ -772,8 +777,14 @@ class DuplicatesTab(QWidget):
         left_layout.addWidget(self.view, 1)
         left_layout.addLayout(bar)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.addWidget(self.details)
+        side_layout.addWidget(self.compare, 1)
+        side_layout.addStretch(0)
         self.splitter.addWidget(left)
-        self.splitter.addWidget(self.details)
+        self.splitter.addWidget(side)
         self.splitter.setStretchFactor(0, 4)
         self.splitter.setStretchFactor(1, 1)
         layout = QVBoxLayout(self)
@@ -951,6 +962,7 @@ class DuplicatesTab(QWidget):
             self.details.show_group(group)
         else:
             self.details.clear()
+        self.compare.show_group(group if isinstance(group, DuplicateGroup) else None)
 
     def _maybe_delete(self) -> None:
         if self.model.selected_count and not self._busy:

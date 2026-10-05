@@ -214,10 +214,10 @@ class JobRunner:
         self.pool.setMaxThreadCount(max_threads)
         self._jobs: list[Job] = []
 
-    def start(self, job: Job) -> Job:
+    def start(self, job: Job, priority: int = 0) -> Job:
         self._jobs = [j for j in self._jobs if not j.done]
         self._jobs.append(job)
-        self.pool.start(job)
+        self.pool.start(job, priority)
         return job
 
     def cancel_all(self) -> None:

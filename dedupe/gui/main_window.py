@@ -408,5 +408,6 @@ class MainWindow(QMainWindow):
     # -- lifecycle -----------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.duplicates_tab.thumbnails.shutdown(1000)
         self.runner.shutdown(2000)
         super().closeEvent(event)
