@@ -239,9 +239,9 @@ Tab, model, `ImageComparePanel` additions, icon.
 
 **Scope:** L
 
-#### Task S10: Delete flow
-- [ ] The dialog shows the "similar, not identical" warning and has no hard-link option
-- [ ] Deleting on one tab updates the other, including aliases
+#### Task S10: Delete flow ✅
+- [x] The dialog shows the "similar, not identical" warning and has no hard-link option
+- [x] Deleting on one tab updates the other, including aliases
 
 **Scope:** M
 
