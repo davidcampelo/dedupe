@@ -94,12 +94,14 @@ py="$work/AppDir/usr/python/bin/python3"
 mapfile -t deps < <("$PYTHON" - <<'PY'
 import re, tomllib
 meta = tomllib.load(open("pyproject.toml", "rb"))["project"]
-reqs = list(meta["dependencies"]) + list(meta.get("optional-dependencies", {}).get("heif", []))
+extras = meta.get("optional-dependencies", {})
+# "heif" adds HEIC thumbnails; "similar" adds `dedupe scan --similar` and the Similar Images tab.
+reqs = list(meta["dependencies"]) + list(extras.get("heif", [])) + list(extras.get("similar", []))
 for r in reqs:
     print(re.sub(r"^PySide6(?![-\w])", "PySide6-Essentials", r))
 PY
 )
-[[ ${#deps[@]} -ge 6 ]] || die "expected at least 6 dependencies from pyproject.toml, found ${#deps[@]}"
+[[ ${#deps[@]} -ge 8 ]] || die "expected at least 8 dependencies from pyproject.toml, found ${#deps[@]}"
 echo "dependencies: ${deps[*]}"
 "$py" -m pip install --quiet --disable-pip-version-check --no-warn-script-location "${deps[@]}" \
   || die "installing dependencies failed"
@@ -156,6 +158,23 @@ QT_QPA_PLATFORM=offscreen "$out" --self-test | grep -q "self-test: ok" \
 
 check=$(mktemp -d)
 trap 'rm -rf "$check"' EXIT
+# The similar-images extra must work from the artifact: two near-identical pictures (the second is
+# a smaller, re-compressed copy) must come back as one similar group.
+mkdir "$check/pics"
+"$py" - "$check/pics" <<'PY' || die "could not generate test images with the bundled interpreter"
+import sys
+import numpy as np
+from PIL import Image
+rng = np.random.default_rng(1)
+img = Image.fromarray(rng.integers(0, 256, (9, 12, 3), dtype=np.uint8)).resize((320, 240), Image.BICUBIC)
+img.save(f"{sys.argv[1]}/a.png")
+img.resize((200, 150)).save(f"{sys.argv[1]}/b.jpg", quality=60)
+PY
+found=$("$out" scan "$check/pics" --similar --no-cache --json) || die "'scan --similar' failed inside the AppImage"
+grep -q '"similar_groups": \[$' <<<"$found" \
+  || die "'scan --similar' did not report similar_groups from inside the AppImage"
+grep -q 'b.jpg' <<<"$found" \
+  || die "'scan --similar' did not find the near-identical pair from inside the AppImage"
 (cd "$check" && "$PWD_ROOT/$out" --appimage-extract >/dev/null) || die "could not unpack the AppImage"
 [[ -s "$check/squashfs-root/$APP_ID.desktop" ]] || die "the AppImage has no desktop file"
 [[ -s "$check/squashfs-root/$APP_ID.png" ]] || die "the AppImage has no icon"

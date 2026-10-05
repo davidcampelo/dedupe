@@ -2,7 +2,7 @@
 
 Main plan: [plan.md](plan.md). Tasks so far: [todo.md](todo.md). Spec: [docs/duplicate-finder-prompt.md](../docs/duplicate-finder-prompt.md) §11, which lists this feature under future ideas.
 
-**Status:** planned, not started.
+**Status:** implemented. Open: the human review at checkpoints S-A and S-B and a manual pass on a real photo folder (needs a display).
 
 ## Overview
 
@@ -245,15 +245,16 @@ Tab, model, `ImageComparePanel` additions, icon.
 
 **Scope:** M
 
-### Checkpoint S-B: Feature complete
-- [ ] Full `check.sh` passes; a manual pass on a real photo folder
+### Checkpoint S-B: Feature complete (full gate passes; the manual pass is open)
+- [x] Full `check.sh` passes
+- [ ] A manual pass on a real photo folder (needs a display; not possible in the devcontainer, left for a human)
 
 ### Phase S3: Ship
 
-#### Task S11: Docs and packaging
-- [ ] README: the feature moves out of "Future ideas", with the limits from "Not covered"
-- [ ] README documents `pip install "dedupe[similar]"`
-- [ ] The AppImage bundles the `similar` extra; `dedupe scan --similar` works from the AppImage; the new AppImage size is recorded
+#### Task S11: Docs and packaging ✅
+- [x] README: the feature moves out of "Future ideas", with the limits from "Not covered"
+- [x] README documents `pip install "dedupe[similar]"`
+- [x] The AppImage bundles the `similar` extra; `dedupe scan --similar` works from the AppImage (the build script now runs it on generated images and fails otherwise); the new AppImage size is recorded: **149 MiB, up from 100 MiB** (numpy and scipy)
 
 **Scope:** S
 
@@ -268,3 +269,15 @@ Tab, model, `ImageComparePanel` additions, icon.
 | An `imagehash` or Pillow upgrade changes hash values | The cache stamp includes both versions; the golden-value test fails on any change; the extra is capped below the next major version |
 | AppImage grows by roughly 60–100 MB (scipy) | Accepted for the maturity of `imagehash`; the size is recorded in S11 |
 | Memory from keeping 64×64 grayscale images | 4 KiB per image (200 MB at 50k): keep them only for images that are part of a candidate pair, and decode the rest again on demand |
+
+## Implementation notes (where the code differs from the plan above)
+
+- **Last-image guard is stricter than written.** It refuses when every *member* is selected, whatever its aliases. Aliases are paths, not `FileEntry` records, so they cannot be selected or re-verified; requiring a surviving member keeps the "the keeper is re-verified" rule true.
+- **No alias promotion.** If a member is deleted on the Duplicates tab while an exact copy of it (its alias) survives, `similar_groups_after` drops the member and the group shrinks; the surviving copy rejoins the group on the next scan.
+- **The similar chain is plain functions** in `core/similar.py` (filter, collapse, hash, candidates, verify, cluster), not `GroupingStage` objects: after hashing the data is no longer a list of file buckets. `ImageFilter`, `Hardlink` and `CollapseExact` still behave as described.
+- **`--json` gets `similar_groups` only with `--similar`**, so the output without it is byte-identical to before.
+- **Hash `variants` are compared jointly:** a pair matches when one variant is within the bound on *both* pHash and dHash (the best variant, not the best of each), and SSIM is computed with that same variant.
+- **`ImageLoadError` is an `OSError`**, so `HashService` reports undecodable images through its existing `failed` list; `FileNotFoundError` and `PermissionError` keep their own types so the thumbnail errors read as before.
+- **HEIC/HEIF are only candidates when pillow-heif is installed**, so a missing codec does not flood the Skipped tab.
+- **Tab order:** Similar Images is the fourth tab (index 3), so the existing `Ctrl+1` to `Ctrl+3` shortcuts and tab indices are unchanged.
+

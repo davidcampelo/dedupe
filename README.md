@@ -5,7 +5,8 @@ Find duplicate files and clean up hidden and temporary files on Linux, **safely*
 Pick a folder. Dedupe scans it, groups files whose contents are byte-for-byte identical, recommends
 which copy to keep, and moves the rest to the Trash after you confirm. A second tool lists hidden
 and temporary files (`.cache`, `~$report.docx`, `notes.txt~`, `*.swp`, `.DS_Store` ...). Images are
-compared side by side.
+compared side by side. Optionally, it also finds images that are *almost* the same (resized,
+re-compressed, converted, rotated or mirrored copies); see [Similar images](#similar-images).
 
 > Screenshots: _placeholders, to be added under `docs/screenshots/`_
 >
@@ -21,7 +22,13 @@ Requires Python 3.12+ and the usual Qt runtime libraries (on Debian/Ubuntu:
 ```bash
 pipx install .             # from a checkout; gives you `dedupe` and `dedupe-gui`
 pipx install ".[heif]"     # optional: HEIC/HEIF thumbnails (pillow-heif)
+pipx install ".[similar]"  # optional: similar-image search (imagehash, numpy, scipy)
+pip install "dedupe[similar]"   # the same extra from a package index
 ```
+
+Without the `similar` extra everything else works; the similar-image controls are greyed out with
+"install dedupe[similar]" and `dedupe scan --similar` exits with code 2 and the same hint. The
+extra pulls in numpy, scipy and PyWavelets, which is why it is optional.
 
 Or build a single-file AppImage (Linux x86_64; needs network on the first build):
 
@@ -30,7 +37,11 @@ pip install -e ".[dev]"
 scripts/build_appimage.sh  # writes dist/Dedupe-<version>-x86_64.AppImage
 dist/Dedupe-*.AppImage                          # opens the GUI
 dist/Dedupe-*.AppImage scan ~/Pictures --json   # the same file is also the CLI
+dist/Dedupe-*.AppImage scan ~/Pictures --similar
 ```
+
+The AppImage bundles the `similar` extra (and `heif`), so it is larger than a plain install, mostly
+because of scipy.
 
 The script checks the built AppImage itself: it runs `--version` and a headless GUI self-test from
 it, and unpacks it to confirm the desktop file and icon are inside. `pipx install` also ships the
@@ -62,14 +73,25 @@ it, and unpacks it to confirm the desktop file and icon are inside. `pipx instal
    listed but never ticked for you, and ticking it, or anything in a top-level hidden folder of your
    home, asks for an extra confirmation. The reclaimable total follows your selection.
 5. **Skipped / Errors tab.** Everything that could not be read, and why. The scan never aborts on it.
-6. **Settings…** (`Ctrl+,`): exclusions, protected folders, minimum size, follow symlinks, cross
+   Images that cannot be decoded (corrupt, truncated, too large) are listed here too.
+6. **Similar Images tab** (fourth tab; empty unless *Find similar images* is on in Settings). One
+   expandable row per group of images that look the same but are different files. Each image shows
+   its dimensions, size, how similar it is to the group's reference image, and "+N" when N exact
+   copies of it exist elsewhere (those stay on the Duplicates tab). **Nothing is ticked for you:**
+   the Suggestion column and the compare panel show which image the recommender would keep (the
+   highest resolution, then the larger file), and **Select suggested** ticks the rest only when
+   you press it. The delete dialog says "These are similar, not identical. The deleted images'
+   content will not exist anywhere else." and has no hard-link option. Deleting on either tab
+   updates both.
+7. **Settings…** (`Ctrl+,`): exclusions, protected folders, minimum size, follow symlinks, cross
    filesystems, hidden files in the duplicate scan, paranoid byte-compare, worker threads, default
-   delete mode, use/clear the hash cache. Changes apply from the next scan.
+   delete mode, use/clear the hash cache, and **Find similar images** with a Strict / Normal /
+   Loose choice. Changes apply from the next scan.
 
 | Keys | |
 |---|---|
 | `Ctrl+O` / `Ctrl+R` or `F5` / `Esc` | choose folder / scan / cancel |
-| `Ctrl+1`, `Ctrl+2`, `Ctrl+3` | switch tab |
+| `Ctrl+1` ... `Ctrl+4` | switch tab |
 | Arrows, `Space`, `Delete` | move, toggle the selected rows, open the delete dialog |
 | `Right` / `Left` / `Enter` | expand / collapse a group |
 
@@ -83,14 +105,19 @@ The CLI never deletes anything; it is for scripting and testing.
 ```bash
 dedupe scan PATH [--min-size N] [--exclude GLOB]... [--protect DIR]... [--json]
                  [--paranoid] [--follow-symlinks] [--cross-filesystems] [--no-hidden] [--no-cache]
+                 [--similar [--threshold {strict,normal,loose,N}]]
 dedupe hidden PATH [--json] [--no-temp-patterns]
 dedupe cache clear
 ```
 
 `scan --json` prints `root`, `files_scanned`, `reclaimable`, `cancelled`, `groups` (each with
 `hash`, `size`, `reclaimable`, `files[]` with `path`, `size`, `mtime_ns`, `verdict`, `reason`, and
-`hardlinked[]`), `empty_files`, `hardlink_sets` and `skipped`. Ctrl-C cancels cleanly (exit 130); a
-bad path exits 2.
+`hardlinked[]`), `empty_files`, `hardlink_sets` and `skipped`. With `--similar` it also prints a
+`similar_groups` array (each group: `id`, `reclaimable`, and `members[]` with `path`, `size`,
+`mtime_ns`, `width`, `height`, `distance`, `similarity`, `aliases[]`, `verdict`, `reason`); without
+`--similar` the output has exactly the keys above. The table output gets a "Similar images" section.
+`--threshold` is `strict` (4), `normal` (8, the default), `loose` (12) or a number of bits from 0 to
+16. Ctrl-C cancels cleanly (exit 130); a bad path exits 2.
 
 ## How detection works
 
@@ -119,6 +146,48 @@ not in a disposable-looking folder (`Downloads`, `tmp`, `Trash`, `cache`, `backu
 a name that doesn't look like a copy (`Copy of`, `(1)`, `_1`, `- Copy`, `.bak`); the oldest
 modification time; the shorter path; alphabetical order. The reason is shown next to every file.
 
+## Similar images
+
+Off by default (`similar_images = false`): every image has to be decoded, which costs far more than
+hashing bytes. Turn it on in Settings or with `--similar`. It needs the `similar` extra.
+
+It runs as its own chain after the exact-duplicate pass, because similar images almost never have
+the same size:
+
+1. **Filter** raster images by extension (not SVG, ICO or camera RAW; HEIC only when pillow-heif is
+   installed). Corrupt, truncated and decompression-bomb files go to *Skipped*, never abort a scan.
+2. **Collapse exact copies.** Hard links and byte-identical files stand for one image, so no set of
+   files appears on both the Duplicates and the Similar tab; the others are listed as that image's
+   exact copies.
+3. **Perceptual hash.** The image is decoded once, uniform borders (letterboxing) are trimmed and it
+   is flattened to a 64x64 grayscale copy. Its **pHash** and **dHash** (64 bits each, from
+   [`imagehash`](https://github.com/JohannesBuchner/imagehash)) are computed for the image and for
+   its 8 rotations and mirror images, so a copy rotated 90 degrees with no EXIF tag, or mirrored,
+   still matches. Flat images (a solid colour) are excluded: their hash would match everything.
+   Hashes are cached next to the file hashes, keyed on the same stat fields plus the installed
+   `imagehash` and Pillow versions, so an upgrade recomputes instead of mixing hash values.
+4. **Candidates.** Every pair is compared by Hamming distance (the number of differing bits out of
+   64), by brute force in numpy. A pair is a candidate when both its pHash and its dHash are within
+   the bound for one of the variants.
+5. **Verify.** A pair within the threshold on both hashes is accepted. A pair a little further out
+   (up to 12 bits, or the threshold if larger) is accepted only when the SSIM of the two 64x64
+   copies is at least 0.90. Strict is 4 bits, Normal 8, Loose 12.
+6. **Cluster** with leader clustering, not connected components: A~B and B~C never put A and C in one
+   group when they look nothing alike. Every member matches its group's leader, the output does not
+   depend on the order files were found in, and the leader is the best image: highest resolution,
+   then the larger file, then the rules used for exact duplicates.
+
+What it does **not** find, deliberately:
+
+| Case | Why not |
+|---|---|
+| Heavy crops (a small part of the picture) | the global hash changes completely; `imagehash.crop_resistant_hash` is a possible follow-up, but it is much slower and needs its own matching |
+| Watermarks and text overlays | they move enough hash bits and SSIM |
+| The same scene in a different shot (bursts, another angle) | not "the same image"; that needs AI image embeddings |
+
+Measured on generated images (6 cores): 10,000 images take about 35 s the first time and 2 s from
+the cache; 50,000 take about 3 minutes and 30 s. See `tasks/plan.md`.
+
 ## Safety guarantees
 
 - **Nothing is deleted without your confirmation**, and **Trash is the default**. The only code
@@ -135,6 +204,10 @@ modification time; the shorter path; alphabetical order. The reason is shown nex
   and a failure leaves no temporary files and no missing paths.
 - **Every action is logged** (JSON lines in `$XDG_DATA_HOME/dedupe/actions.log`, opened *before*
   the first change; if the log cannot be opened nothing is touched), and summarised afterwards.
+- **Similar images are different files**, so the rules are stricter: hard links are refused outright
+  (they would replace one picture with another), at least one member of every group must stay (it
+  is re-verified before anything is removed), nothing is pre-selected, and the confirmation says
+  that the content of a deleted image will not exist anywhere else. Each refusal has a mutation test.
 - **Dry run** goes through the same plan and checks and skips only the change.
 - Protected configuration files and folders need an explicit extra confirmation, and the core
   refuses them unless that confirmation was given. The home folder and `/` are never removable.
@@ -165,10 +238,11 @@ the running app with a stack sample. Measurements are recorded in `tasks/plan.md
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,similar]"
 scripts/check.sh --fast   # ruff, ruff format, mypy, pytest (no slow tests): the pre-commit gate
 scripts/check.sh          # + slow 100k-file tests, >= 90 % core coverage, desktop-file-validate
 python scripts/bench.py   # 100k-file benchmark: cold, warm, cancel latency
+python scripts/bench_similar.py --images 10000   # similar-images benchmark (needs the extra)
 python scripts/render_icons.py          # icon contact sheet (light and dark)
 python scripts/render_png_icons.py      # regenerate data/icons/hicolor
 ```
@@ -176,8 +250,8 @@ python scripts/render_png_icons.py      # regenerate data/icons/hicolor
 Git hooks (`.githooks`), Claude Code hooks (`.claude/`) and CI all run the same
 `scripts/check.sh`. The plan and task list live in [tasks/](tasks/).
 
-## Future ideas (out of scope for v1)
+## Future ideas (out of scope for now)
 
-Perceptual "similar image" detection (e.g. pHash via `imagehash`), audio/video similarity, scanning
-several root folders at once, and scheduled scans. `core/grouper.py` is a chain of stages so a
-similarity-based stage can be added later.
+Audio/video similarity, crop-resistant image matching, scanning several root folders at once, and
+scheduled scans. `core/grouper.py` is a chain of stages for exact duplicates; the similar-images
+chain in `core/similar.py` runs after it.

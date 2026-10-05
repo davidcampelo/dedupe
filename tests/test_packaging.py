@@ -215,3 +215,14 @@ def test_dedupe_gui_answers_help_and_version_without_a_display() -> None:
             timeout=60,
         )
         assert result.returncode == 0 and expected in result.stdout, result.stderr
+
+
+def test_the_similar_extra_is_declared_installed_for_dev_and_bundled_in_the_appimage() -> None:
+    extras = PYPROJECT["project"]["optional-dependencies"]
+    assert any(r.startswith("imagehash") and "<5" in r for r in extras["similar"])
+    assert any(r.startswith("numpy>=2") for r in extras["similar"])  # np.bitwise_count
+    assert all(r in extras["dev"] for r in extras["similar"])  # the gate must run the feature
+    script = (ROOT / "scripts" / "build_appimage.sh").read_text()
+    assert 'extras.get("similar"' in script and 'scan "$check/pics" --similar' in script
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert ".[dev,similar]" in ci
