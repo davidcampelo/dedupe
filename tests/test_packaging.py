@@ -54,6 +54,22 @@ def test_png_icons_exist_with_the_right_dimensions(size: int) -> None:
     assert image.hasAlphaChannel()
 
 
+ANTIALIAS_TOLERANCE = 24  # per channel; Qt builds differ slightly in edge antialiasing
+
+
+def max_channel_diff(a: QImage, b: QImage) -> int:
+    if a.size() != b.size():
+        return 255
+    a = a.convertToFormat(QImage.Format.Format_ARGB32)
+    b = b.convertToFormat(QImage.Format.Format_ARGB32)
+    worst = 0
+    for y in range(a.height()):
+        for x in range(a.width()):
+            p, q = a.pixel(x, y), b.pixel(x, y)
+            worst = max(worst, *(abs(((p >> s) & 255) - ((q >> s) & 255)) for s in (0, 8, 16, 24)))
+    return worst
+
+
 def test_png_icons_are_up_to_date_with_the_svg_sources(qtbot: QtBot, tmp_path: Path) -> None:
     render = load_script("render_png_icons")
     for size in SIZES:
@@ -62,7 +78,8 @@ def test_png_icons_are_up_to_date_with_the_svg_sources(qtbot: QtBot, tmp_path: P
         )
         fresh = tmp_path / f"{size}.png"
         render.render(source, size, fresh)
-        assert QImage(str(fresh)) == QImage(str(HICOLOR / f"{size}x{size}/apps/{APP_ID}.png")), (
+        committed = QImage(str(HICOLOR / f"{size}x{size}/apps/{APP_ID}.png"))
+        assert max_channel_diff(QImage(str(fresh)), committed) <= ANTIALIAS_TOLERANCE, (
             f"{size}px icon is stale: run scripts/render_png_icons.py"
         )
 

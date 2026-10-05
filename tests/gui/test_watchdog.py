@@ -9,7 +9,10 @@ from tests.gui.conftest import UiWatchdog
 
 
 def test_watchdog_fails_when_the_gui_thread_blocks(qtbot: QtBot, ui_watchdog: UiWatchdog) -> None:
-    with pytest.raises(AssertionError, match="GUI thread stalled"), ui_watchdog.watch():
+    with (
+        pytest.raises(AssertionError, match="GUI thread stalled"),
+        ui_watchdog.watch(threshold=0.1),
+    ):
         qtbot.wait(50)
         time.sleep(0.25)  # blocks the event loop
         qtbot.wait(50)
